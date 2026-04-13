@@ -1,4 +1,4 @@
-# NEXUS v2.5(Stable)
+# NEXUS v2.5
 Not a Normal To-do app its Priority Based { Matrix Lisitng }
 
 ## Features
