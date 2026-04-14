@@ -35,3 +35,18 @@ Not a Normal To-do app its Priority Based { Matrix Lisitng }
 - AlarmManager with exact alarms
 - BroadcastReceiver for notification handling
 - NotificationCompat with action buttons
+
+
+
+
+
+
+## License
+
+This project is licensed under GNU GPL v3.
+
+- You must give credit to the original author (Priyanshu Pradhan)
+- Any modifications must remain open source
+- Same license must be used
+
+Please respect the original work.
