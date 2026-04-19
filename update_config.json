@@ -1,7 +1,7 @@
 {
-  "latest_version": "2.8",
-  "version_code": 28,
-  "download_url": "https://github.com/Rsng-Phoenix/Nexus/releases/download/Nexus_v2.8/Nexus.apk",
-  "release_notes": "In-app Update, Bug Fix",
+  "latest_version": "3.0",
+  "version_code": 30,
+  "download_url": "https://github.com/Rsng-Phoenix/Nexus/releases/download/Nexus_v3.0/Nexus.apk",
+  "release_notes": "New Feature added and bug fix",
   "force_update": false
 }
