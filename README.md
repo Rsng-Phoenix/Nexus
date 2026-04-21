@@ -11,11 +11,10 @@ Not a Normal To-do app its Priority Based { Matrix Lisitng }
 - Mark tasks as **completed**
 
 ### Reminders & Notifications
-- Set **exact date and time** reminders for any task
+- Set **exact date and time** Notification reminders for any task
 - **All-Day Reminder Mode**: get notified every 1 hour, 2 hours, or a custom interval throughout the selected day
 - **Date Range Reminders**: schedule recurring reminders across a span of dates (e.g., from exam start to exam end)
 - **Pinned Task Alerts**: pinned tasks with reminders show a persistent, non-dismissible notification until the task is completed
-- **Alarm Mode**: triggers a real device alarm sound for time-sensitive tasks when date+time or time+pin is configured
 - Snooze reminders for 10 minutes directly from the notification
 - Dismiss reminders with a "Mark Done" action from the notification
 - Notifications are tappable — opens directly to the related task
