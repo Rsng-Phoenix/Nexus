@@ -1,7 +1,7 @@
 {
-  "latest_version": "3.3",
-  "version_code": 33,
-  "download_url": "https://github.com/Rsng-Phoenix/Nexus/releases/download/Nexus_v3.3/Nexus.apk",
+  "latest_version": "3.2",
+  "version_code": 32,
+  "download_url": "https://github.com/Rsng-Phoenix/Nexus/releases/download/Nexus_v3.2/Nexus.apk",
   "release_notes": "New Feature added and bug fix",
   "force_update": false
 }
