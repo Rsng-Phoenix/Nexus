@@ -247,6 +247,7 @@ A web version of Nexus using the same data model and sync system.
     Move tasks between quadrants using intuitive drag & drop interactions.
   </em>
 </p>
+
 ---
 
 ## License
