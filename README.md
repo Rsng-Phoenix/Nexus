@@ -181,7 +181,8 @@ A web version of Nexus using the same data model and sync system.
 ### 🏠 Matrix Dashboard
 
 <p align="center">
-  <img src="HOME_SCREEN_URL" width="220" alt="Nexus Matrix Dashboard">
+  <img src="<img width="1080" height="2400" alt="image" src="https://github.com/user-attachments/assets/27d8d266-e9fe-4d86-bfca-61ac682b4e07" />
+" width="220" alt="Nexus Matrix Dashboard">
 </p>
 
 <p align="center">
@@ -193,7 +194,8 @@ A web version of Nexus using the same data model and sync system.
 ### ➕ Quick Task Creation
 
 <p align="center">
-  <img src="ADD_TASK_URL" width="220" alt="Create Task">
+  <img src="<img width="1080" height="2400" alt="image" src="https://github.com/user-attachments/assets/8c26c6b6-d90b-4b00-a0a1-797954d1d756" />
+" width="220" alt="Create Task">
 </p>
 
 <p align="center">
@@ -205,11 +207,12 @@ A web version of Nexus using the same data model and sync system.
 ### 📋 Matrix Organization
 
 <p align="center">
-  <img src="TASKS_VIEW_URL" width="220" alt="Tasks in Matrix">
+  <img src="<img width="1080" height="2400" alt="image" src="https://github.com/user-attachments/assets/bb5f6707-e568-429a-84b0-f41bb92daa88" />
+" width="220" alt="Tasks in Matrix">
 </p>
 
 <p align="center">
-  <em>Tasks automatically organized into priority quadrants for better focus.</em>
+  <em>Tasks can organized into priority quadrants for better focus.</em>
 </p>
 
 ---
@@ -217,8 +220,10 @@ A web version of Nexus using the same data model and sync system.
 ### 📝 Rich Task Notes
 
 <p align="center">
-  <img src="TASK_EDITOR_URL" width="220" alt="Task Editor">
-  <img src="LIST_TYPES_URL" width="220" alt="Rich Notes">
+  <img src="<img width="1080" height="2400" alt="image" src="https://github.com/user-attachments/assets/16382977-c0d9-4f0a-9175-e950f8155850" />
+" width="220" alt="Task Editor">
+  <img src="<img width="1080" height="2400" alt="image" src="https://github.com/user-attachments/assets/698f47a8-fb7f-4354-8a17-2ce67d72398b" />
+" width="220" alt="Rich Notes">
 </p>
 
 <p align="center">
@@ -233,8 +238,10 @@ A web version of Nexus using the same data model and sync system.
 ### 🔄 Drag & Drop Prioritization
 
 <p align="center">
-  <img src="DRAGGING_TASK_URL" width="220" alt="Dragging Task">
-  <img src="AFTER_DRAG_URL" width="220" alt="Task Moved">
+  <img src="<img width="1080" height="2400" alt="image" src="https://github.com/user-attachments/assets/6f99f2ca-84a6-4812-a9fc-ce1bb8cc0046" />
+" width="220" alt="Dragging Task">
+  <img src="<img width="1080" height="2400" alt="image" src="https://github.com/user-attachments/assets/931d4c71-1551-4214-a769-c650dd897b57" />
+" width="220" alt="Task Moved">
 </p>
 
 <p align="center">
