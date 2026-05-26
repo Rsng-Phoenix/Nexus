@@ -1,4 +1,4 @@
-<img width="103" height="245" alt="image" src="https://github.com/user-attachments/assets/b7345a74-1345-4f41-88bc-21cc7e2c77a0" /># NEXUS v3.4
+# NEXUS v3.4
 
 A Priority-Driven Productivity App built around Matrix Listing.
 
@@ -178,15 +178,70 @@ A web version of Nexus using the same data model and sync system.
 ---
 
 ## Screenshots
-<img width="1080" height="2400" alt="image" src="https://github.com/user-attachments/assets/6285ab21-3f64-4602-ac5b-3cdedfd801c5" />
-<img width="1080" height="2400" alt="image" src="https://github.com/user-attachments/assets/d69be267-d0c2-4678-89c2-0933e68dde50" />
-<img width="1080" height="2400" alt="image" src="https://github.com/user-attachments/assets/4bf82aaf-0290-4741-940e-5173fb97c5a4" />
-<img width="1080" height="2400" alt="image" src="https://github.com/user-attachments/assets/65228eff-e407-4db4-8fd7-16a6595e7c6e" />
-<img width="1080" height="2400" alt="image" src="https://github.com/user-attachments/assets/ed9c320f-e78a-4508-a4a1-91f343376304" />
-<img width="1080" height="2400" alt="image" src="https://github.com/user-attachments/assets/0ba196c5-32b8-470e-b3df-1f06f031b5a5" />
-<img width="1080" height="2400" alt="image" src="https://github.com/user-attachments/assets/41aa0d49-4ac2-474f-a72d-76b0a47f2896" />
+### 🏠 Matrix Dashboard
 
+<p align="center">
+  <img src="HOME_SCREEN_URL" width="220" alt="Nexus Matrix Dashboard">
+</p>
 
+<p align="center">
+  <em>Priority Matrix home screen with High, Medium, Low and None quadrants.</em>
+</p>
+
+---
+
+### ➕ Quick Task Creation
+
+<p align="center">
+  <img src="ADD_TASK_URL" width="220" alt="Create Task">
+</p>
+
+<p align="center">
+  <em>Create tasks quickly using the slide-up composer with priority selection.</em>
+</p>
+
+---
+
+### 📋 Matrix Organization
+
+<p align="center">
+  <img src="TASKS_VIEW_URL" width="220" alt="Tasks in Matrix">
+</p>
+
+<p align="center">
+  <em>Tasks automatically organized into priority quadrants for better focus.</em>
+</p>
+
+---
+
+### 📝 Rich Task Notes
+
+<p align="center">
+  <img src="TASK_EDITOR_URL" width="220" alt="Task Editor">
+  <img src="LIST_TYPES_URL" width="220" alt="Rich Notes">
+</p>
+
+<p align="center">
+  <em>
+    Advanced note editor supporting checklists, bullet lists,
+    numbered lists, formatting, and structured planning.
+  </em>
+</p>
+
+---
+
+### 🔄 Drag & Drop Prioritization
+
+<p align="center">
+  <img src="DRAGGING_TASK_URL" width="220" alt="Dragging Task">
+  <img src="AFTER_DRAG_URL" width="220" alt="Task Moved">
+</p>
+
+<p align="center">
+  <em>
+    Move tasks between priority quadrants using intuitive drag & drop gestures.
+  </em>
+</p>
 ---
 
 ## License
