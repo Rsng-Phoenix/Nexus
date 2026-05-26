@@ -200,7 +200,7 @@ A web version of Nexus using the same data model and sync system.
 
 <p align="center">
   <em>
-    Create tasks instantly using the slide-up composer with priority selection.
+    Create tasks instantly using the + button or by dragging it to any of the matrix.
   </em>
 </p>
 
