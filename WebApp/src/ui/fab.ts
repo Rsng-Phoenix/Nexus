@@ -1,9 +1,11 @@
+import { vibrateTap } from '../lib/haptics';
 import type { Priority } from '../types';
 
 export function mountFab(opts: {
   onOpenAdd: (priority: Priority) => void;
   getQuadrantBounds: () => Map<Priority, DOMRect>;
   onHighlight: (p: Priority | null) => void;
+  onQuadrantHover?: () => void;
 }): HTMLButtonElement {
   const fab = document.createElement('button');
   fab.className = 'nx-fab';
@@ -16,6 +18,7 @@ export function mountFab(opts: {
   let dragging = false;
   let startX = 0;
   let startY = 0;
+  let lastHover: Priority | null = null;
   const dragThreshold = 8;
 
   const applyOffset = (): void => {
@@ -46,7 +49,12 @@ export function mountFab(opts: {
     offsetX += e.movementX;
     offsetY += e.movementY;
     applyOffset();
-    opts.onHighlight(hitQuadrant(e.clientX, e.clientY));
+    const hit = hitQuadrant(e.clientX, e.clientY);
+    if (hit !== lastHover) {
+      lastHover = hit;
+      if (hit) opts.onQuadrantHover?.();
+    }
+    opts.onHighlight(hit);
   });
 
   fab.addEventListener('pointerup', (e) => {
@@ -59,7 +67,9 @@ export function mountFab(opts: {
       offsetY = 0;
       applyOffset();
       opts.onHighlight(null);
+      lastHover = null;
     } else {
+      vibrateTap();
       opts.onOpenAdd('HIGH');
     }
     dragging = false;

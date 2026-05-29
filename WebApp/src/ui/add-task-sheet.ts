@@ -28,6 +28,10 @@ export function showAddTaskSheet(
     </div>`;
 
   document.body.appendChild(overlay);
+  const sheet = overlay.querySelector('[data-sheet]') as HTMLElement;
+  sheet?.addEventListener('click', (e) => e.stopPropagation());
+  sheet?.addEventListener('pointerdown', (e) => e.stopPropagation());
+
   const titleEl = overlay.querySelector('[data-title]') as HTMLInputElement;
   const notesEl = overlay.querySelector('[data-notes]') as HTMLInputElement;
   const priWrap = overlay.querySelector('.nx-pri-wrap') as HTMLElement;
