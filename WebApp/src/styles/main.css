@@ -10,6 +10,50 @@ html {
   font-family: 'Inter', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   touch-action: manipulation;
+  color-scheme: dark light;
+}
+
+/* Fallback + system preference before JS (splash / first paint) */
+:root,
+html[data-theme='dark'] {
+  --nx-bg: #080810;
+  --nx-surface: #0f0f1c;
+  --nx-surfaceEl: #161628;
+  --nx-stroke: #1e1e38;
+  --nx-accent: #6c63ff;
+  --nx-textPri: #f0f0fa;
+  --nx-textSec: #8a8aa8;
+  --nx-textTer: #4a4a68;
+  --nx-notesText: #d8d8ec;
+  --nx-numberAccent: #9b8cff;
+}
+
+html[data-theme='light'] {
+  --nx-bg: #f4f4fa;
+  --nx-surface: #ffffff;
+  --nx-surfaceEl: #ffffff;
+  --nx-stroke: #e2e2ee;
+  --nx-accent: #5b54e8;
+  --nx-textPri: #12121c;
+  --nx-textSec: #5c5c78;
+  --nx-textTer: #9898b0;
+  --nx-notesText: #2a2a3c;
+  --nx-numberAccent: #5b54e8;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    --nx-bg: #f4f4fa;
+    --nx-surface: #ffffff;
+    --nx-surfaceEl: #ffffff;
+    --nx-stroke: #e2e2ee;
+    --nx-accent: #5b54e8;
+    --nx-textPri: #12121c;
+    --nx-textSec: #5c5c78;
+    --nx-textTer: #9898b0;
+    --nx-notesText: #2a2a3c;
+    --nx-numberAccent: #5b54e8;
+  }
 }
 
 body {
@@ -1168,53 +1212,67 @@ html[data-layout='desktop'] .nx-bottom-sheet {
 }
 
 .nx-splash-center {
-  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 100%;
+  padding: 0 24px;
+  box-sizing: border-box;
 }
 
 .nx-splash-logo {
-  margin-bottom: 28px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 110px;
+  height: 110px;
+  margin: 0 auto 28px;
   animation: nxSplashLogo 0.55s ease forwards;
 }
 
+.nx-splash-logo .nx-logo-svg {
+  display: block;
+  margin: 0 auto;
+}
+
 .nx-splash-letters {
-  display: flex;
-  justify-content: center;
-  gap: 0.12em;
-  font-size: 40px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  font-size: clamp(32px, 8vw, 40px);
   font-weight: 900;
-  letter-spacing: 0.2em;
-  margin-right: -0.2em;
+  letter-spacing: 0.32em;
+  text-indent: 0.32em;
+  text-align: center;
   color: var(--nx-textPri);
-}
-
-.nx-splash-letters span {
   opacity: 0;
-  transform: translateY(20px);
-  animation: nxSplashLetter 0.4s ease forwards;
+  transform: translateY(16px);
+  animation: nxSplashLetter 0.45s ease 0.45s forwards;
 }
-
-.nx-splash-letters span:nth-child(1) { animation-delay: 0.45s; }
-.nx-splash-letters span:nth-child(2) { animation-delay: 0.51s; }
-.nx-splash-letters span:nth-child(3) { animation-delay: 0.57s; }
-.nx-splash-letters span:nth-child(4) { animation-delay: 0.63s; }
-.nx-splash-letters span:nth-child(5) { animation-delay: 0.69s; }
 
 .nx-splash-sub {
   font-size: 10px;
-  letter-spacing: 0.4em;
+  letter-spacing: 0.38em;
+  text-indent: 0.38em;
+  text-align: center;
   color: var(--nx-textSec);
-  margin-top: 8px;
+  margin: 10px 0 0;
   opacity: 0;
   animation: nxSplashSub 0.35s ease 0.85s forwards;
 }
 
 .nx-splash-foot {
   position: absolute;
+  left: 0;
+  right: 0;
   bottom: calc(24px + env(safe-area-inset-bottom));
   text-align: center;
   font-size: 13px;
   color: var(--nx-textSec);
   line-height: 1.6;
+  padding: 0 16px;
 }
 
 @keyframes nxSplashLogo {
