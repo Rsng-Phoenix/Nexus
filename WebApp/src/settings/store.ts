@@ -22,7 +22,7 @@ export interface Settings {
 }
 
 const defaults: Settings = {
-  themeMode: 'DARK',
+  themeMode: 'SYSTEM',
   fontScale: 1,
   autoArrange: true,
   retentionDays: 15,

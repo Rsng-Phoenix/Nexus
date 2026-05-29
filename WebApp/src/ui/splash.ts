@@ -8,9 +8,7 @@ export function showSplash(onDone: () => void): void {
   el.innerHTML = `
     <div class="nx-splash-center">
       <div class="nx-splash-logo">${nexusLogoHtml(110)}</div>
-      <div class="nx-splash-letters" aria-hidden="true">
-        ${'NEXUS'.split('').map((c) => `<span>${c}</span>`).join('')}
-      </div>
+      <h1 class="nx-splash-letters">NEXUS</h1>
       <p class="nx-splash-sub">priority matrix</p>
     </div>
     <div class="nx-splash-foot">
