@@ -1,0 +1,14 @@
+{
+  "name": "Nexus",
+  "short_name": "Nexus",
+  "description": "Priority matrix — syncs with Nexus Android",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#080810",
+  "background_color": "#080810",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

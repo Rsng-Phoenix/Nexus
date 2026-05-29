@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#080810"/>
+  <path d="M0 0 L256 0 L0 256 Z" fill="#FF4060" opacity="0.9"/>
+  <path d="M256 0 L512 0 L512 256 Z" fill="#FFAA00" opacity="0.9"/>
+  <path d="M0 256 L256 512 L0 512 Z" fill="#3B9EFF" opacity="0.9"/>
+  <path d="M256 256 L512 512 L256 512 Z" fill="#00D084" opacity="0.9"/>
+  <text x="256" y="290" text-anchor="middle" fill="#F0F0FA" font-family="system-ui,sans-serif" font-weight="900" font-size="72" letter-spacing="8">N</text>
+</svg>
