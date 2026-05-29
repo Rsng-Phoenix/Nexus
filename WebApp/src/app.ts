@@ -9,7 +9,7 @@ import {
   syncStatusLabel,
   topBarGreeting
 } from './settings/store';
-import { isSyncing, runSync, scheduleSync, signIn, signOut } from './sync/manager';
+import { isSyncing, runSync, scheduleSync, signInMessage, signOut } from './sync/manager';
 import { exportFullBackup, parseFullBackup, previewRestore } from './sync/backup';
 import { showAboutSheet } from './ui/about-sheet';
 import { nexusLogoHtml } from './ui/nexus-logo';
@@ -49,9 +49,13 @@ export class NexusApp {
   private async bootstrap(): Promise<void> {
     this.tasks = await db.getActiveTasks();
     this.render();
-    if (getSettings().googleEmail) void runSync().then(() => this.reload());
+    if (getSettings().googleEmail) {
+      void runSync({ background: true }).then(() => this.reload());
+    }
     setInterval(() => {
-      if (getSettings().googleEmail && !isSyncing()) void runSync();
+      if (getSettings().googleEmail && !isSyncing()) {
+        void runSync({ background: true });
+      }
     }, 15 * 60 * 1000);
   }
 
@@ -396,7 +400,7 @@ export class NexusApp {
     });
   }
 
-  private async showProfile(): Promise<void> {
+  private showProfile(): void {
     const s = getSettings();
     const localTaskCount = this.tasks.filter((t) => t.deletedAt === 0).length;
     if (!s.googleEmail) {
@@ -407,13 +411,15 @@ export class NexusApp {
       });
       return;
     }
-    const driveTaskCount = await countDriveTasks();
-    showProfileSheet({
+    const overlay = showProfileSheet({
       localTaskCount,
-      driveTaskCount,
+      driveTaskCount: null,
       onOpenSettings: () => this.showSettings(),
       onReload: () => this.reload(),
       snack: (m) => this.snack(m)
+    });
+    void countDriveTasks().then((count) => {
+      if (count !== null) overlay?.setDriveTaskCount(count);
     });
   }
 
@@ -514,8 +520,8 @@ export class NexusApp {
       });
     });
     overlay.querySelector('[data-signin]')?.addEventListener('click', async () => {
-      const ok = await signIn();
-      this.snack(ok ? 'Signed in' : 'Sign-in failed');
+      const msg = await signInMessage();
+      this.snack(msg);
       await this.reload();
       close();
     });

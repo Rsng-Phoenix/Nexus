@@ -98,14 +98,28 @@ export function exportSyncJson(tasks: Task[], lastSync = Date.now()): string {
   });
 }
 
-export function parseSyncJson(raw: string): { version: number; lastSync: number; tasks: Task[] } {
-  const root = JSON.parse(raw) as Record<string, unknown>;
+function parseBackupRoot(raw: string | Record<string, unknown>): Record<string, unknown> {
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) throw new Error('Backup file is empty');
+    return JSON.parse(trimmed) as Record<string, unknown>;
+  }
+  return raw;
+}
+
+export function parseSyncJson(
+  raw: string | Record<string, unknown>
+): { version: number; lastSync: number; tasks: Task[] } {
+  const root = parseBackupRoot(raw);
   const version = Number(root.version ?? root.backupVersion ?? BACKUP_VERSION);
-  if (version > BACKUP_VERSION) {
+  if (version !== BACKUP_VERSION) {
     throw new Error(`Unsupported backup version: ${version}`);
   }
   const lastSync = Number(root.lastSync ?? 0);
-  const arr = (root.tasks as Record<string, unknown>[]) ?? [];
+  const tasksRaw = root.tasks;
+  const arr = Array.isArray(tasksRaw)
+    ? (tasksRaw as Record<string, unknown>[])
+    : [];
   return { version, lastSync, tasks: arr.map(syncJsonToTask) };
 }
 
