@@ -1,11 +1,15 @@
 import { NexusApp } from './app';
-import { initSettings } from './settings/store';
+import { ensureOAuthClientConsistency } from './sync/auth';
+import { initSettings, patchSettings } from './settings/store';
 import { showSplash } from './ui/splash';
 
 const appEl = document.getElementById('app');
 if (!appEl) throw new Error('#app missing');
 
 initSettings();
+ensureOAuthClientConsistency(() => {
+  patchSettings({ driveFileId: '', lastSyncError: '' });
+});
 
 showSplash(() => {
   new NexusApp(appEl);
