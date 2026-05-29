@@ -12,12 +12,14 @@ import {
 import { isSyncing, runSync, scheduleSync, signIn, signOut } from './sync/manager';
 import { exportFullBackup, parseFullBackup, previewRestore } from './sync/backup';
 import { showAboutSheet } from './ui/about-sheet';
+import { nexusLogoHtml } from './ui/nexus-logo';
 import { showProfileSheet, showProfileSignInSheet } from './ui/profile-sheet';
 import { countDriveTasks } from './sync/manager';
 import { showAddTaskSheet } from './ui/add-task-sheet';
 import { bindTaskRows } from './ui/bind-tasks';
 import { mountFab } from './ui/fab';
 import { showTaskDetailSheet } from './ui/task-detail-sheet';
+import { vibrateDelete, vibrateDragStep } from './lib/haptics';
 import { hapticPulse, newTask, reorderIncomplete, tasksForPriority } from './task-utils';
 import type { Priority, Task } from './types';
 import { PRIORITIES, PRIORITY_META } from './types';
@@ -111,6 +113,7 @@ export class NexusApp {
       task,
       (t) => this.save(t),
       async (t) => {
+        vibrateDelete();
         await db.softDeleteTask(t);
         this.tasks = await db.getActiveTasks();
         scheduleSync();
@@ -140,8 +143,11 @@ export class NexusApp {
       <div class="nx-shell">
         <header class="nx-topbar">
           <div class="nx-brand" data-about>
-            <h1>NEXUS</h1>
-            <span>priority matrix</span>
+            <span class="nx-brand-logo">${nexusLogoHtml(32)}</span>
+            <div class="nx-brand-text">
+              <h1>NEXUS</h1>
+              <span>priority matrix</span>
+            </div>
           </div>
           <button class="nx-profile" type="button" data-settings aria-label="Profile and settings">
             <div class="nx-avatar">${avatarHtml()}</div>
@@ -176,7 +182,8 @@ export class NexusApp {
         this.root.querySelectorAll('.nx-quadrant').forEach((q) => {
           q.classList.toggle('nx-highlight', q.getAttribute('data-q') === p);
         });
-      }
+      },
+      onQuadrantHover: () => vibrateDragStep()
     });
     slot.appendChild(this.fabEl);
 
@@ -266,6 +273,7 @@ export class NexusApp {
         if (pointInRect(ev.clientX, ev.clientY, r)) target = p;
       }
       if (target && target !== task.priority) {
+        vibrateDragStep();
         await this.save({ ...task, priority: target });
       }
       this.drag = null;
@@ -314,7 +322,8 @@ export class NexusApp {
     const qFab = mountFab({
       onOpenAdd: () => this.openAdd(priority, true),
       getQuadrantBounds: () => new Map(),
-      onHighlight: () => {}
+      onHighlight: () => {},
+      onQuadrantHover: () => vibrateDragStep()
     });
     qFab.classList.add('nx-fab--quadrant');
     qFab.style.setProperty('--q-color', meta.color);

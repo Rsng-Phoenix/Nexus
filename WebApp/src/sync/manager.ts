@@ -1,4 +1,9 @@
 import * as db from '../db/tasks';
+import {
+  vibrateSyncFail,
+  vibrateSyncPulse,
+  vibrateSyncSuccess
+} from '../lib/haptics';
 import { getSettings, patchSettings } from '../settings/store';
 import type { Task } from '../types';
 import { exportSyncJson, isDeleted, parseSyncJson } from './backup';
@@ -8,10 +13,32 @@ import { countActiveRemovals, mergeTasks } from './merge';
 
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
 let syncing = false;
+let pulseTimer: ReturnType<typeof setInterval> | null = null;
 
 export function scheduleSync(): void {
   if (syncTimer) clearTimeout(syncTimer);
-  syncTimer = setTimeout(() => void runSync(), 5000);
+  syncTimer = setTimeout(() => void runSync(), 1200);
+}
+
+function startSyncPulse(): void {
+  stopSyncPulse();
+  vibrateSyncPulse();
+  pulseTimer = setInterval(() => vibrateSyncPulse(), 900);
+}
+
+function stopSyncPulse(): void {
+  if (pulseTimer) {
+    clearInterval(pulseTimer);
+    pulseTimer = null;
+  }
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && getSettings().googleEmail) {
+      scheduleSync();
+    }
+  });
 }
 
 export async function signIn(): Promise<boolean> {
@@ -59,6 +86,7 @@ export async function runSync(): Promise<{ ok: boolean; message: string }> {
 
   syncing = true;
   patchSettings({ lastSyncTime: Date.now() });
+  startSyncPulse();
 
   try {
     const token = await getAccessToken();
@@ -84,6 +112,7 @@ export async function runSync(): Promise<{ ok: boolean; message: string }> {
         `Sync would remove ${removals} of ${localActive.length} tasks. Continue?`
       );
       if (!ok) {
+        stopSyncPulse();
         syncing = false;
         return { ok: false, message: 'Sync cancelled' };
       }
@@ -97,11 +126,15 @@ export async function runSync(): Promise<{ ok: boolean; message: string }> {
       lastSuccessTime: Date.now(),
       lastSyncError: ''
     });
+    stopSyncPulse();
+    vibrateSyncSuccess();
     syncing = false;
     return { ok: true, message: 'Synced' };
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Sync failed';
     patchSettings({ lastSyncError: msg });
+    stopSyncPulse();
+    vibrateSyncFail();
     syncing = false;
     return { ok: false, message: msg };
   }

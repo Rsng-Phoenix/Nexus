@@ -60,6 +60,23 @@ function escapeHtml(s: string): string {
     .replace(/>/g, '&gt;');
 }
 
+function blockNeedsRichHtml(block: NoteBlock): boolean {
+  return (
+    block.spans.length > 0 ||
+    block.bold ||
+    block.underline ||
+    block.localScale !== 1
+  );
+}
+
+function setEditContent(el: HTMLElement, block: NoteBlock, baseSize: number): void {
+  if (blockNeedsRichHtml(block)) {
+    el.innerHTML = renderBlockText(block, baseSize) || '<br>';
+  } else {
+    el.textContent = block.text;
+  }
+}
+
 export function renderNotesEditor(
   container: HTMLElement,
   rawNotes: string,
@@ -67,6 +84,7 @@ export function renderNotesEditor(
 ): { getBlocks: () => NoteBlock[]; setBlocks: (b: NoteBlock[]) => void } {
   let blocks = fromStorage(rawNotes);
   let composer = { bold: false, underline: false, scale: 1 };
+  let editingId: string | null = null;
 
   const scale = getSettings().fontScale;
   const baseSize = 14 * scale;
@@ -160,13 +178,18 @@ export function renderNotesEditor(
     }
   };
 
+  const notesHasContent = (): boolean =>
+    blocks.some((b) => b.text.trim().length > 0 || b.type !== 'TEXT');
+
   const draw = (): void => {
+    const keepFocus = editingId;
+    const hasContent = notesHasContent();
     container.innerHTML = '';
     blocks.forEach((block, index) => {
       const row = document.createElement('div');
       row.className = 'nx-note-line';
       row.dataset.block = block.id;
-      row.style.paddingLeft = `${block.indent * 14}px`;
+      row.style.paddingLeft = `${block.indent * 18}px`;
 
       if (block.type === 'CHECKBOX') {
         const cb = document.createElement('input');
@@ -208,9 +231,27 @@ export function renderNotesEditor(
       const el = document.createElement('div');
       el.className = 'nx-note-edit';
       el.contentEditable = 'true';
-      el.innerHTML = renderBlockText(block, baseSize) || '<br>';
+      el.setAttribute('role', 'textbox');
+      el.setAttribute('tabindex', '0');
+      const showPh =
+        block.type === 'TEXT' && !block.text.trim() && !hasContent;
+      if (showPh) {
+        el.dataset.placeholder = 'Add description…';
+        el.dataset.ph = '1';
+      } else {
+        delete el.dataset.placeholder;
+        delete el.dataset.ph;
+      }
+      setEditContent(el, block, baseSize);
+
       el.addEventListener('focus', () => {
         activeId = block.id;
+        editingId = block.id;
+        row.classList.add('nx-note-line--focus');
+      });
+      el.addEventListener('blur', () => {
+        if (editingId === block.id) editingId = null;
+        row.classList.remove('nx-note-line--focus');
       });
       el.addEventListener('input', () => {
         const liveIdx = indexOf(block.id);
@@ -235,10 +276,12 @@ export function renderNotesEditor(
         if (e.key === 'Enter' && !e.shiftKey) {
           if (live.type === 'TEXT') return;
           e.preventDefault();
+          editingId = null;
           insertAfter(liveIdx, live.type);
         }
         if (e.key === 'Backspace' && !live.text) {
           e.preventDefault();
+          editingId = null;
           backspaceBlock(liveIdx);
         }
         if (e.key === 'Tab' && live.type !== 'TEXT') {
@@ -256,36 +299,62 @@ export function renderNotesEditor(
       row.appendChild(el);
       container.appendChild(row);
     });
+    if (keepFocus) focusBlock(keepFocus, false);
   };
 
   let activeId: string | null = blocks[0]?.id ?? null;
   draw();
+
+  container.addEventListener('click', (e) => {
+    const edit = (e.target as HTMLElement).closest('.nx-note-edit');
+    if (edit) (edit as HTMLElement).focus();
+  });
+
   return {
     getBlocks: () => blocks,
     setBlocks: (b) => {
       blocks = b;
       flushStorage();
+      const focus = editingId;
       draw();
+      if (focus) focusBlock(focus, false);
     }
   };
 }
 
 export function notesToolbar(
   bar: HTMLElement,
+  notesRoot: HTMLElement,
   getBlocks: () => NoteBlock[],
   setBlocks: (b: NoteBlock[]) => void,
   onPersist: () => void,
   getActiveEl: () => HTMLElement | null
 ): void {
   let composer = { bold: false, underline: false, scale: 1 };
+  let savedSel: { blockId: string; sel: Sel } | null = null;
+
+  notesRoot.addEventListener('mouseup', () => {
+    const el = getActiveEl();
+    if (!el) return;
+    const id = el.closest('[data-block]')?.getAttribute('data-block');
+    const sel = getSelectionFromEl(el);
+    if (id && sel) savedSel = { blockId: id, sel };
+  });
 
   const applyFormat = (fn: (b: NoteBlock, sel: Sel | null) => NoteBlock): void => {
-    const el = getActiveEl();
     const blocks = getBlocks();
-    const id = el?.closest('[data-block]')?.getAttribute('data-block');
-    const idx = id ? blocks.findIndex((b) => b.id === id) : blocks.length - 1;
-    if (idx < 0) return;
-    const sel = el ? getSelectionFromEl(el) : null;
+    let el = getActiveEl();
+    let blockId = el?.closest('[data-block]')?.getAttribute('data-block') ?? null;
+    let sel = el ? getSelectionFromEl(el) : null;
+    if ((!sel || sel.start === sel.end) && savedSel) {
+      blockId = savedSel.blockId;
+      sel = savedSel.sel;
+      el = notesRoot.querySelector(
+        `[data-block="${blockId}"] .nx-note-edit`
+      ) as HTMLElement | null;
+    }
+    let idx = blockId ? blocks.findIndex((b) => b.id === blockId) : blocks.length - 1;
+    if (idx < 0) idx = blocks.length - 1;
     const updated = fn(blocks[idx], sel);
     if (!blocks[idx].text) {
       composer = {
@@ -295,10 +364,19 @@ export function notesToolbar(
       };
     }
     const next = [...blocks];
+    const id = blocks[idx].id;
+    const keepSel = sel && sel.start < sel.end ? sel : null;
     next[idx] = updated;
     setBlocks(next);
     onPersist();
-    if (el && sel) requestAnimationFrame(() => restoreSelection(el, sel));
+    if (keepSel) {
+      requestAnimationFrame(() => {
+        const row = notesRoot.querySelector(
+          `[data-block="${id}"] .nx-note-edit`
+        ) as HTMLElement | null;
+        if (row) restoreSelection(row, keepSel);
+      });
+    }
   };
 
   const insertList = (type: BlockType): void => {
@@ -308,6 +386,21 @@ export function notesToolbar(
     let idx = id ? blocks.findIndex((b) => b.id === id) : blocks.length - 1;
     if (idx < 0) idx = blocks.length - 1;
     const block = blocks[idx];
+
+    const isList = block.type === 'BULLET' || block.type === 'NUMBERED';
+    if (
+      (type === 'BULLET' || type === 'NUMBERED') &&
+      isList &&
+      block.text.trim() &&
+      block.type === type
+    ) {
+      const next = [...blocks];
+      next[idx] = { ...block, indent: block.indent + 1 };
+      setBlocks(next);
+      onPersist();
+      return;
+    }
+
     if (!block.text && block.type !== 'TEXT') {
       if (block.type === type) {
         requestAnimationFrame(() => el?.focus());
@@ -366,7 +459,11 @@ export function notesToolbar(
     b.className = 'nx-tool';
     b.textContent = label;
     b.type = 'button';
-    b.addEventListener('click', action);
+    b.addEventListener('mousedown', (e) => e.preventDefault());
+    b.addEventListener('click', (e) => {
+      e.preventDefault();
+      action();
+    });
     bar.appendChild(b);
   });
 }

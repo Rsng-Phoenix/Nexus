@@ -1,3 +1,4 @@
+import { vibrateTap } from './lib/haptics';
 import { formatReminderLabel } from './reminder-label';
 import type { Priority, Task } from './types';
 
@@ -117,6 +118,7 @@ export function reorderIncomplete(
 }
 
 export function hapticPulse(el?: HTMLElement): void {
+  vibrateTap();
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   const target = el ?? document.body;
   target.classList.add('nx-haptic');

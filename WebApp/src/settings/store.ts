@@ -17,6 +17,8 @@ export interface Settings {
   lastSyncError: string;
   layoutMode: LayoutMode;
   tutorialDone: boolean;
+  /** 0 = off, 100 = full (Web Vibration API). */
+  vibrationStrength: number;
 }
 
 const defaults: Settings = {
@@ -32,7 +34,8 @@ const defaults: Settings = {
   lastSuccessTime: 0,
   lastSyncError: '',
   layoutMode: 'auto',
-  tutorialDone: false
+  tutorialDone: false,
+  vibrationStrength: 100
 };
 
 function loadRaw(): Settings {
