@@ -1,4 +1,4 @@
-# NEXUS v3.4
+# NEXUS
 
 A Priority-Driven Productivity App built around Matrix Listing.
 
