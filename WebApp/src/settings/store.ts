@@ -55,6 +55,12 @@ export interface Settings {
   notifyMeetings: boolean;
   /** How long before a meeting it rings, minutes (0 = when it starts); one of MEETING_LEAD_CHOICES. */
   meetingLeadMinutes: number;
+  /** Clash radar: flag meetings from linked calendars that overlap. */
+  clashRadar: boolean;
+  /** Overlaps shorter than this (minutes) are not called clashes; one of CLASH_MIN_CHOICES. */
+  clashMinMinutes: number;
+  /** Clashes the user chose to ignore (ids from clashId), newest last. */
+  ignoredClashes: string[];
   /** Which screen Nexus opens on: the matrix, or the calendar for people who plan by date. */
   startView: StartView;
   /** Settings schema version, for one-time migrations. */
@@ -79,6 +85,10 @@ export const DEFAULTS = {
   maxNotificationsPerHour: 12,
   calendarRefreshMinutes: 15
 } as const;
+export const CLASH_MIN_CHOICES = [1, 5, 10, 15, 30] as const;
+export const clashMinLabel = (m: number) => (m <= 1 ? 'Any overlap' : `${m} min or more`);
+/** Only the newest ignored clashes are kept. */
+export const MAX_IGNORED_CLASHES = 300;
 export const MEETING_LEAD_CHOICES = [0, 1, 5, 10, 15, 30] as const;
 export const meetingLeadLabel = (m: number) => (m === 0 ? 'When it starts' : `${m} min before`);
 export const CALENDAR_REFRESH_CHOICES = [5, 10, 15, 30, 60, 180, 360] as const;
@@ -128,6 +138,9 @@ const defaults: Settings = {
   calendarRefreshMinutes: DEFAULTS.calendarRefreshMinutes,
   notifyMeetings: false,
   meetingLeadMinutes: 10,
+  clashRadar: true,
+  clashMinMinutes: 1,
+  ignoredClashes: [],
   startView: 'matrix',
   schema: 4
 };
@@ -161,6 +174,8 @@ function loadRaw(): Settings {
     s.calendarRefreshMinutes = nearestRefresh(Number(s.calendarRefreshMinutes) || DEFAULTS.calendarRefreshMinutes);
     if (!MEETING_LEAD_CHOICES.includes(s.meetingLeadMinutes as (typeof MEETING_LEAD_CHOICES)[number])) s.meetingLeadMinutes = 10;
     if (s.startView !== 'calendar') s.startView = 'matrix';
+    if (!CLASH_MIN_CHOICES.includes(s.clashMinMinutes as (typeof CLASH_MIN_CHOICES)[number])) s.clashMinMinutes = 1;
+    if (!Array.isArray(s.ignoredClashes)) s.ignoredClashes = [];
     return s;
   } catch {
     return { ...defaults };
@@ -192,7 +207,9 @@ export function resetSettings(): void {
     calendarRefreshMinutes: DEFAULTS.calendarRefreshMinutes,
     startView: 'matrix',
     notifyMeetings: false,
-    meetingLeadMinutes: 10
+    meetingLeadMinutes: 10,
+    clashRadar: true,
+    clashMinMinutes: 1
   });
 }
 

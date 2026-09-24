@@ -1,3 +1,4 @@
+import type { PairLink } from '../pair/pair';
 import { computed, signal } from '@preact/signals';
 import type { SharePayload } from '../share/export';
 import type { Priority } from '../types';
@@ -23,6 +24,8 @@ export type Layer =
   | { kind: 'onboarding' }
   | { kind: 'calendar' }
   | { kind: 'calendars' }
+  | { kind: 'clashes' }
+  | { kind: 'pair'; link?: PairLink }
   | { kind: 'icsImport'; fileName: string; text: string }
   | { kind: 'sheetImport'; file: File }
   | { kind: 'mini' };
@@ -82,6 +85,16 @@ export function back(): void {
 /** Close a specific layer and everything above it. */
 export function closeKind(kind: Layer['kind']): void {
   const idx = layers.value.findIndex((l) => l.kind === kind);
+  if (idx < 0) return;
+  const n = layers.value.length - idx;
+  for (let i = 0; i < n; i++) popLocal();
+  suppressPop += n;
+  history.go(-n);
+}
+
+/** Close the layer with [id] and everything above it (a Back tapped on a screen that isn't on top). */
+export function closeFrom(id: number): void {
+  const idx = layers.value.findIndex((l) => l.id === id);
   if (idx < 0) return;
   const n = layers.value.length - idx;
   for (let i = 0; i < n; i++) popLocal();

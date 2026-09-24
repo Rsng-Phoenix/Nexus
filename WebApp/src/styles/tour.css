@@ -114,3 +114,5 @@
   .nx-tour-finger { transform: translate(var(--fx), var(--fy)); }
 }
 .nx-tour-card-wrap, .nx-tour-card-wrap * { -webkit-user-select: none; user-select: none; }
+
+.nx-ob-pair { display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 44px; margin-top: 10px; border-radius: 22px; border: 1px dashed color-mix(in srgb, var(--nx-accent) 55%, var(--nx-stroke)); color: var(--nx-accent); font-size: 14px; font-weight: 600; }

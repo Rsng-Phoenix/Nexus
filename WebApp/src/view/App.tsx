@@ -19,6 +19,8 @@ import { ReminderWizard } from './ReminderWizard';
 import { DeadlineSheet } from './DeadlineSheet';
 import { CalendarPage } from './CalendarPage';
 import { LinkedCalendarsSheet } from './LinkedCalendarsSheet';
+import { ClashSheet } from './ClashSheet';
+import { PairSheet } from './PairSheet';
 import { IcsImportSheet } from './IcsImportSheet';
 import { SheetImportPage } from './SheetImportPage';
 import { SettingsPage } from './SettingsPage';
@@ -51,7 +53,10 @@ export function App() {
   useEffect(() => {
     void purgeExpired();
     const s = getSettings();
-    if (!s.profileOnboardingDone) nav.open({ kind: 'onboarding' });
+    // A scanned "Scan to set up" code opens its own sheet instead of the first-run screen / tour.
+    if (nav.has('pair')) {
+      /* setting up from another device */
+    } else if (!s.profileOnboardingDone) nav.open({ kind: 'onboarding' });
     else if (!s.tutorialDone) startTour();
     if (s.googleEmail) void runSync({ background: true });
     // Pull remote changes into the UI when a sync finishes.
@@ -130,7 +135,9 @@ function LayerView({ entry, leaving }: { entry: LayerEntry; leaving: boolean }) 
     leaving,
     onExited: () => nav.finishLeave(entry.id),
     onDismiss: () => {
+      if (leaving) return;
       if (nav.top.value?.id === entry.id) nav.back();
+      else nav.closeFrom(entry.id);
     }
   };
   switch (entry.kind) {
@@ -164,6 +171,10 @@ function LayerView({ entry, leaving }: { entry: LayerEntry; leaving: boolean }) 
       return <CalendarPage {...p} />;
     case 'calendars':
       return <LinkedCalendarsSheet {...p} />;
+    case 'clashes':
+      return <ClashSheet {...p} />;
+    case 'pair':
+      return <PairSheet {...p} link={entry.link} />;
     case 'icsImport':
       return <IcsImportSheet {...p} fileName={entry.fileName} text={entry.text} />;
     case 'sheetImport':

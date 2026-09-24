@@ -14,6 +14,8 @@ import {
   parseIcs,
   parseIcsDateTime,
   parseRrule,
+  parseDuration,
+  eventLengthMs,
   unescapeText,
   unfoldLines
 } from './ics';
@@ -472,5 +474,63 @@ describe('meeting links', () => {
   it('is read from a real event', () => {
     const ics = 'BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:20261001T090000Z\r\nSUMMARY:Standup\r\nDESCRIPTION:Join: https://meet.google.com/aaa-bbbb-ccc\\nThanks\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n';
     expect(parseIcs(ics)[0].meetingUrl).toBe('https://meet.google.com/aaa-bbbb-ccc');
+  });
+});
+
+describe('edited recurring meetings', () => {
+  const cal = (...lines: string[]) => ['BEGIN:VCALENDAR', ...lines, 'END:VCALENDAR'].join('\r\n');
+  const series = ['BEGIN:VEVENT', 'UID:s1', 'SUMMARY:Standup', 'DTSTART:20261005T090000Z', 'DTEND:20261005T093000Z', 'RRULE:FREQ=DAILY;COUNT=5'];
+
+  it('skips EXDATE instances but still counts them for COUNT', () => {
+    const [ev] = parseIcs(cal(...series, 'EXDATE:20261006T090000Z,20261008T090000Z', 'END:VEVENT'));
+    const at = (d: Date) => nextOccurrence(ev, d)?.time;
+    expect(at(new Date(utc(2026, 10, 5, 10)))).toBe(utc(2026, 10, 7, 9));
+    expect(at(new Date(utc(2026, 10, 7, 10)))).toBe(utc(2026, 10, 9, 9));
+    expect(at(new Date(utc(2026, 10, 9, 10)))).toBeUndefined();
+  });
+
+  it('a moved instance replaces the original; a cancelled one removes it', () => {
+    const events = parseIcs(
+      cal(
+        ...series,
+        'END:VEVENT',
+        'BEGIN:VEVENT', 'UID:s1', 'RECURRENCE-ID:20261006T090000Z', 'DTSTART:20261006T140000Z', 'DTEND:20261006T150000Z', 'SUMMARY:Standup (moved)', 'END:VEVENT',
+        'BEGIN:VEVENT', 'UID:s1', 'RECURRENCE-ID:20261007T090000Z', 'DTSTART:20261007T090000Z', 'STATUS:CANCELLED', 'END:VEVENT'
+      )
+    );
+    expect(events.length).toBe(1);
+    const [ev] = events;
+    expect(nextOccurrence(ev, new Date(utc(2026, 10, 5, 10)))?.time).toBe(utc(2026, 10, 8, 9));
+    expect(ev.moved?.map((m) => [m.summary, m.start.time])).toEqual([['Standup (moved)', utc(2026, 10, 6, 14)]]);
+    expect(ev.moved?.[0].recurrenceIdParams).toBeUndefined();
+  });
+
+  it('matches a moved instance written in the series time zone', () => {
+    const events = parseIcs(GOOGLE);
+    const standup = events.find((e) => e.uid === 'standup@google.com')!;
+    // Monday 19 Oct 10:30 IST moved to 12:00 IST.
+    expect(nextOccurrence(standup, new Date(utc(2026, 10, 19, 0)))?.time).toBe(utc(2026, 10, 26, 5));
+    expect(standup.moved?.[0].start.time).toBe(utc(2026, 10, 19, 6, 30));
+  });
+});
+
+describe('event length, free time and declines', () => {
+  const one = (...lines: string[]) =>
+    parseIcs(['BEGIN:VCALENDAR', 'BEGIN:VEVENT', 'UID:x', 'DTSTART:20261005T090000Z', ...lines, 'END:VEVENT', 'END:VCALENDAR'].join('\r\n'))[0];
+
+  it('reads DTEND or DURATION', () => {
+    expect(eventLengthMs(one('DTEND:20261005T100000Z'))).toBe(3_600_000);
+    expect(eventLengthMs(one('DURATION:PT45M'))).toBe(45 * 60_000);
+    expect(eventLengthMs(one())).toBe(0);
+    expect(parseDuration('P1DT2H')).toBe(26 * 3_600_000);
+    expect(parseDuration('-PT15M')).toBe(0);
+    expect(parseDuration('junk')).toBe(0);
+  });
+
+  it('flags free events and who declined', () => {
+    expect(one('TRANSP:TRANSPARENT').free).toBe(true);
+    expect(one('TRANSP:OPAQUE').free).toBeUndefined();
+    const ev = one('ATTENDEE;CN=Me;PARTSTAT=DECLINED:mailto:Me@Example.com', 'ATTENDEE;PARTSTAT=ACCEPTED:mailto:you@example.com');
+    expect(ev.declined).toEqual(['me@example.com']);
   });
 });

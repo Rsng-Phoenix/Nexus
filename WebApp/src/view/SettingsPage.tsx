@@ -6,6 +6,8 @@ import { getAllTasksIncludingDeleted, mergeRestoreTasks, replaceAllTasks } from 
 import { canVibrate, haptic } from '../lib/haptics';
 import {
   CALENDAR_REFRESH_CHOICES,
+  CLASH_MIN_CHOICES,
+  clashMinLabel,
   MEETING_LEAD_CHOICES,
   meetingLeadLabel,
   refreshLabel,
@@ -416,7 +418,7 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
       case 'reminders':
         return `Snooze ${snoozeLabel(s.snoozeMinutes)} · ${dueDefaults.length ? `${dueDefaults.length} deadline alert${dueDefaults.length === 1 ? '' : 's'} at ${formatAlertTime(s.defaultDueAlertTime)}` : 'no deadline alerts'}`;
       case 'calendar':
-        return `${s.linkedCalendars.length ? `${s.linkedCalendars.length} linked · checked every ${refreshLabel(s.calendarRefreshMinutes)}` : 'No linked calendars'} · week starts ${s.weekStart === 1 ? 'Monday' : 'Sunday'}`;
+        return `${s.linkedCalendars.length ? `${s.linkedCalendars.length} linked · checked every ${refreshLabel(s.calendarRefreshMinutes)}` : 'No linked calendars'} · clash radar ${s.clashRadar ? 'on' : 'off'}`;
       case 'tasks':
         return `${archivedCount} archived · ${deletedCount} recently deleted`;
       case 'appearance':
@@ -500,6 +502,16 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
                   trailing={<Chevron />}
                 />
               )}
+            </SettingsGroup>
+            <SettingsGroup>
+              <SettingsRow
+                icon="qrScan"
+                title="Set up another device"
+                subtitle="Scan a code to copy your linked calendars and settings to a phone, tablet or computer"
+                tint={Accent}
+                onClick={() => nav.open({ kind: 'pair' })}
+                trailing={<Chevron />}
+              />
             </SettingsGroup>
             <p class="nx-set-note">
               Nexus stores your tasks in a private Nexus-only folder of your own Google Drive. It can't see any of your other files.
@@ -775,6 +787,37 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
                 />
               </InlineSetting>
               <p class="nx-set-inline-note">Also checked every time you open Nexus or the calendar.</p>
+            </SettingsGroup>
+
+            <SectionHeader>Clash radar</SectionHeader>
+            <SettingsGroup>
+              <SettingsRow
+                icon="radar"
+                title="Clash radar"
+                subtitle="Spots meetings that overlap across Google, Zoho, iCloud and Outlook · the same invite in two calendars counts once"
+                tint={Red}
+                trailing={<Switch label="Clash radar" checked={s.clashRadar} onChange={(v) => patchSettings({ clashRadar: v })} />}
+              />
+              <Collapse open={s.clashRadar}>
+                <InlineSetting label="Count it as a clash">
+                  <Stepper
+                    value={Math.max(0, CLASH_MIN_CHOICES.indexOf(s.clashMinMinutes as (typeof CLASH_MIN_CHOICES)[number]))}
+                    min={0}
+                    max={CLASH_MIN_CHOICES.length - 1}
+                    format={(i) => clashMinLabel(CLASH_MIN_CHOICES[i])}
+                    onChange={(i) => patchSettings({ clashMinMinutes: CLASH_MIN_CHOICES[i] })}
+                  />
+                </InlineSetting>
+                <GroupDivider />
+                <SettingsRow
+                  icon="radar"
+                  title="See clashes"
+                  subtitle={s.ignoredClashes.length ? `${s.ignoredClashes.length} ignored` : 'Free, declined and all-day events never clash'}
+                  tint={Red}
+                  onClick={() => nav.open({ kind: 'clashes' })}
+                  trailing={<Chevron />}
+                />
+              </Collapse>
             </SettingsGroup>
 
             <SectionHeader>Import & export</SectionHeader>

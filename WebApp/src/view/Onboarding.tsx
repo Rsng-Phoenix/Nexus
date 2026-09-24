@@ -2,6 +2,7 @@ import '../styles/tour.css';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { getSettings, patchSettings, sanitizeNickname, settingsSig } from '../settings/store';
 import { signInMessage } from '../sync/manager';
+import * as nav from '../state/nav';
 import { longSessionsAvailable } from '../sync/oauth';
 import type { LayerProps } from './App';
 import { Icon } from './icons';
@@ -124,6 +125,10 @@ export function Onboarding(p: LayerProps) {
                 {error}
               </p>
             )}
+            <button class="nx-ob-pair press" onClick={() => nav.replaceTop({ kind: 'pair' })}>
+              <Icon name="qrScan" size={18} />
+              Already use Nexus? Scan to set up
+            </button>
           </>
         )}
         <div class="nx-ob-actions">

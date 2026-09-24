@@ -3,10 +3,12 @@ import './styles/nexus.css';
 import './styles/views.css';
 import * as db from './db/tasks';
 import { startLinkedAutoRefresh } from './calendar/linked';
+import { startClashRadar } from './calendar/radar';
+import { parsePairLink } from './pair/pair';
 import { initReminders } from './reminders/push';
 import * as nav from './state/nav';
 import { allTasks, onTasksWritten, reload } from './state/store';
-import { finishRedirectSignIn, runSync, scheduleSync } from './sync/manager';
+import { finishRedirectSignIn, onSyncState, runSync, scheduleSync } from './sync/manager';
 import { showSnack } from './state/toasts';
 import { ensureOAuthClientConsistency } from './sync/auth';
 import { getSettings, initSettings, patchSettings } from './settings/store';
@@ -59,6 +61,10 @@ function bootWidget() {
     );
     void finishRedirectSignIn().then((msg) => msg && showSnack(msg, undefined, 4000));
     startLinkedAutoRefresh();
+    // Show what each sync brought down (the full app does this in App.tsx).
+    onSyncState((busy, result) => {
+      if (!busy && result) void reload();
+    });
     const sync = () => void (getSettings().googleEmail && runSync({ background: true }));
     sync();
     // Changes from the phone or the full app show up within minutes, and at once when focused.
@@ -68,6 +74,9 @@ function bootWidget() {
 }
 
 function bootApp() {
+  // Scan to set up: read the one-time code, then wipe it (and its key) from the address bar and history.
+  const pairLink = parsePairLink(location.href);
+  if (pairLink) history.replaceState(null, '', location.pathname);
   const splashHost = document.createElement('div');
   document.body.appendChild(splashHost);
   render(
@@ -83,18 +92,20 @@ function bootApp() {
     render(<App />, root!);
     // Dev-only handle for scripted UI checks (tree-shaken out of production builds).
     if (import.meta.env.DEV) {
-      const [store, settings, manager, prompts, linked, ics] = await Promise.all([
+      const [store, settings, manager, prompts, linked, ics, pair] = await Promise.all([
         import('./state/store'),
         import('./settings/store'),
         import('./sync/manager'),
         import('./state/prompts'),
         import('./calendar/linked'),
-        import('./calendar/ics')
+        import('./calendar/ics'),
+        import('./pair/pair')
       ]);
-      Object.assign(window, { __nx: { nav, store, settings, manager, prompts, db, linked, ics } });
+      Object.assign(window, { __nx: { nav, store, settings, manager, prompts, db, linked, ics, pair } });
     }
     initReminders();
     startLinkedAutoRefresh();
+    startClashRadar();
     // Back from Google's sign-in page: finish signing in (asks about local tasks if needed).
     void finishRedirectSignIn().then((msg) => msg && showSnack(msg, undefined, 4000));
     // Changes made from a notification (Done) while the app was closed: sync them now.
@@ -108,7 +119,11 @@ function bootApp() {
     const action = q.get('action');
     const openPage = q.get('open');
     if (ref || action || openPage) history.replaceState(null, '', location.pathname);
-    if (ref) openTaskByUuid(ref);
+    if (pairLink) {
+      nav.closeKind('onboarding');
+      nav.open({ kind: 'pair', link: pairLink });
+    }
+    else if (ref) openTaskByUuid(ref);
     else if (action === 'add') nav.open({ kind: 'add', priority: 'HIGH' });
     else if (openPage === 'calendar') nav.open({ kind: 'calendar' });
     else if (openPage === 'quadrant') {
