@@ -1,0 +1,440 @@
+// Nexus Desk for Mac: a menu-bar companion that keeps a small Nexus window on your desktop.
+//
+// It is the Nexus web app in a floating window (WebKit, the engine behind Safari), plus:
+//   · Float on top of every app, sit on the desktop like a widget, or behave like a normal window
+//   · A hot corner that shows / hides it (pick any corner, or none)
+//   · Size presets, transparency, hide when you click elsewhere, start at login
+//
+// No App Store, no Xcode: install-mac.sh compiles this file into "Nexus Desk.app" with the
+// osacompile tool that ships with macOS. It talks only to the Nexus web app's address below.
+// Settings are stored in ~/Library/Preferences/io.github.rsng-phoenix.nexus-desk.plist.
+
+ObjC.import('Cocoa');
+ObjC.import('WebKit');
+
+const NEXUS_URL = '__NEXUS_URL__';
+const WIDGET_URL = NEXUS_URL + '?mode=widget';
+const AGENT_LABEL = 'io.github.rsng-phoenix.nexus-desk';
+const AGENT_PATH = $.NSHomeDirectory().js + '/Library/LaunchAgents/' + AGENT_LABEL + '.plist';
+// Google's sign-in page only opens in real browsers, so the window identifies as Safari.
+const USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15';
+
+const MODES = [
+  ['float', 'Float on top of all apps'],
+  ['desktop', 'Stay on the desktop (like a widget)'],
+  ['normal', 'Normal window']
+];
+const CORNERS = [
+  ['off', 'Off'],
+  ['tl', 'Top left'],
+  ['tr', 'Top right'],
+  ['bl', 'Bottom left'],
+  ['br', 'Bottom right']
+];
+const SIZES = [
+  ['Small', 320, 480],
+  ['Medium', 380, 600],
+  ['Large (two-column matrix)', 560, 720]
+];
+const OPACITY = [1, 0.92, 0.85, 0.75];
+const HOT_CORNER_DWELL_MS = 250;
+const TICK_S = 0.12;
+
+const defaults = $.NSUserDefaults.standardUserDefaults;
+function pref(key, fallback) {
+  const v = defaults.objectForKey(key);
+  return v.isNil() ? fallback : v.js;
+}
+function setPref(key, value) {
+  defaults.setObjectForKey($(value), key);
+}
+
+let panel = null;
+let web = null;
+let statusItem = null;
+let controller = null;
+const popups = [];
+let dwell = 0;
+let armed = true;
+
+// ─── Window ────────────────────────────────────────────────────────────────
+
+function applyMode() {
+  const mode = pref('mode', 'float');
+  if (mode === 'desktop') {
+    let level = -2147483603;
+    try {
+      level = $.CGWindowLevelForKey(18) + 1; // just above the desktop icons
+    } catch (e) {}
+    panel.level = level;
+    panel.collectionBehavior = 1 | 16 | 64; // all Spaces · stationary · not in ⌘` cycling
+    panel.hidesOnDeactivate = false;
+  } else {
+    panel.level = mode === 'float' ? 3 : 0; // NSFloatingWindowLevel : NSNormalWindowLevel
+    panel.collectionBehavior = mode === 'float' ? 1 | 256 : 0; // all Spaces + over full-screen apps
+    panel.hidesOnDeactivate = !!pref('autoHide', false);
+  }
+  panel.alphaValue = pref('opacity', 1);
+}
+
+function makePanel() {
+  const rect = $.NSMakeRect(0, 0, 380, 600);
+  // titled · closable · resizable · utility (slim title bar)
+  panel = $.NSPanel.alloc.initWithContentRectStyleMaskBackingDefer(rect, 1 | 2 | 8 | 16, 2, false);
+  panel.title = 'Nexus';
+  panel.releasedWhenClosed = false;
+  panel.becomesKeyOnlyIfNeeded = false;
+  panel.floatingPanel = false;
+  panel.minSize = $.NSMakeSize(280, 360);
+  if (!panel.setFrameUsingName('NexusDeskPanel')) {
+    const vis = $.NSScreen.mainScreen.visibleFrame;
+    panel.setFrameOrigin($.NSMakePoint(vis.origin.x + vis.size.width - 400, vis.origin.y + vis.size.height - 620));
+  }
+  panel.frameAutosaveName = 'NexusDeskPanel';
+
+  const cfg = $.WKWebViewConfiguration.alloc.init;
+  cfg.preferences.javaScriptCanOpenWindowsAutomatically = true;
+  web = $.WKWebView.alloc.initWithFrameConfiguration(panel.contentView.bounds, cfg);
+  web.autoresizingMask = 2 | 16; // follow the window's width and height
+  web.customUserAgent = USER_AGENT;
+  web.UIDelegate = controller;
+  if (web.respondsToSelector('setInspectable:')) web.inspectable = true;
+  panel.contentView.addSubview(web);
+  web.loadRequest($.NSURLRequest.requestWithURL($.NSURL.URLWithString(WIDGET_URL)));
+  applyMode();
+}
+
+function isShown() {
+  return !!panel && panel.isVisible;
+}
+
+function show() {
+  $.NSApp.activateIgnoringOtherApps(true);
+  panel.makeKeyAndOrderFront(null);
+  panel.orderFrontRegardless;
+}
+
+function hide() {
+  panel.orderOut(null);
+}
+
+function toggle() {
+  if (isShown() && ($.NSApp.isActive || pref('mode', 'float') !== 'normal')) hide();
+  else show();
+}
+
+// ─── Hot corner ────────────────────────────────────────────────────────────
+
+function cornerHit(corner) {
+  const p = $.NSEvent.mouseLocation;
+  const screens = $.NSScreen.screens.js;
+  for (let i = 0; i < screens.length; i++) {
+    const f = screens[i].frame;
+    const x0 = f.origin.x;
+    const y0 = f.origin.y;
+    const x1 = x0 + f.size.width;
+    const y1 = y0 + f.size.height;
+    if (p.x < x0 - 1 || p.x > x1 + 1 || p.y < y0 - 1 || p.y > y1 + 1) continue;
+    const left = p.x <= x0 + 2;
+    const right = p.x >= x1 - 3;
+    const bottom = p.y <= y0 + 2;
+    const top = p.y >= y1 - 3;
+    if (corner === 'tl') return left && top;
+    if (corner === 'tr') return right && top;
+    if (corner === 'bl') return left && bottom;
+    if (corner === 'br') return right && bottom;
+  }
+  return false;
+}
+
+function tick() {
+  const corner = pref('corner', 'off');
+  if (corner === 'off') return;
+  if (cornerHit(corner)) {
+    dwell += TICK_S * 1000;
+    if (armed && dwell >= HOT_CORNER_DWELL_MS) {
+      armed = false;
+      toggle();
+    }
+  } else {
+    dwell = 0;
+    armed = true;
+  }
+}
+
+// ─── Start at login ────────────────────────────────────────────────────────
+
+const fm = $.NSFileManager.defaultManager;
+function loginEnabled() {
+  return fm.fileExistsAtPath(AGENT_PATH);
+}
+function setLogin(on) {
+  if (!on) {
+    fm.removeItemAtPathError(AGENT_PATH, null);
+    return;
+  }
+  const app = $.NSBundle.mainBundle.bundlePath.js.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const xml =
+    '<?xml version="1.0" encoding="UTF-8"?>\n' +
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n' +
+    '<plist version="1.0"><dict>' +
+    '<key>Label</key><string>' + AGENT_LABEL + '</string>' +
+    '<key>ProgramArguments</key><array><string>/usr/bin/open</string><string>-a</string><string>' + app + '</string></array>' +
+    '<key>RunAtLoad</key><true/>' +
+    '</dict></plist>\n';
+  fm.createDirectoryAtPathWithIntermediateDirectoriesAttributesError($.NSHomeDirectory().js + '/Library/LaunchAgents', true, $(), null);
+  $(xml).writeToFileAtomicallyEncodingError(AGENT_PATH, true, 4, null);
+}
+
+// ─── Menu ──────────────────────────────────────────────────────────────────
+
+function item(title, action, key, tag) {
+  const it = $.NSMenuItem.alloc.initWithTitleActionKeyEquivalent(title, action, key || '');
+  it.target = controller;
+  if (tag !== undefined) it.tag = tag;
+  return it;
+}
+
+function buildMenu() {
+  const m = $.NSMenu.alloc.init;
+  m.autoenablesItems = false;
+
+  const toggleItem = item(isShown() ? 'Hide Nexus' : 'Show Nexus', 'toggle:', 'n');
+  m.addItem(toggleItem);
+  m.addItem(item('Open full Nexus in browser', 'openFull:', 'o'));
+  m.addItem(item('Reload', 'reload:', 'r'));
+  m.addItem($.NSMenuItem.separatorItem);
+
+  const mode = pref('mode', 'float');
+  const modeRoot = item('Window', null);
+  const modeMenu = $.NSMenu.alloc.init;
+  MODES.forEach((x, i) => {
+    const it = item(x[1], 'setMode:', '', i);
+    it.state = x[0] === mode ? 1 : 0;
+    modeMenu.addItem(it);
+  });
+  modeMenu.addItem($.NSMenuItem.separatorItem);
+  SIZES.forEach((x, i) => modeMenu.addItem(item('Size: ' + x[0], 'setSize:', '', i)));
+  modeMenu.addItem($.NSMenuItem.separatorItem);
+  OPACITY.forEach((o, i) => {
+    const it = item(o === 1 ? 'Opaque' : Math.round((1 - o) * 100) + '% see-through', 'setOpacity:', '', i);
+    it.state = Math.abs(pref('opacity', 1) - o) < 0.001 ? 1 : 0;
+    modeMenu.addItem(it);
+  });
+  modeMenu.addItem($.NSMenuItem.separatorItem);
+  const autoHide = item('Hide when I click another app', 'toggleAutoHide:');
+  autoHide.state = pref('autoHide', false) ? 1 : 0;
+  autoHide.enabled = mode !== 'desktop';
+  modeMenu.addItem(autoHide);
+  modeRoot.submenu = modeMenu;
+  m.addItem(modeRoot);
+
+  const corner = pref('corner', 'off');
+  const cornerRoot = item('Hot corner' + (corner === 'off' ? '' : ': ' + CORNERS.find((c) => c[0] === corner)[1]), null);
+  const cornerMenu = $.NSMenu.alloc.init;
+  CORNERS.forEach((c, i) => {
+    const it = item(c[1], 'setCorner:', '', i);
+    it.state = c[0] === corner ? 1 : 0;
+    cornerMenu.addItem(it);
+  });
+  cornerMenu.addItem($.NSMenuItem.separatorItem);
+  const note = item('Push the pointer into the corner to show or hide Nexus.', null);
+  note.enabled = false;
+  cornerMenu.addItem(note);
+  const note2 = item('Pick a corner macOS or your hot-corner app doesn’t use.', null);
+  note2.enabled = false;
+  cornerMenu.addItem(note2);
+  cornerRoot.submenu = cornerMenu;
+  m.addItem(cornerRoot);
+
+  const login = item('Start at login', 'toggleLogin:');
+  login.state = loginEnabled() ? 1 : 0;
+  m.addItem(login);
+  m.addItem($.NSMenuItem.separatorItem);
+  m.addItem(item('Uninstall Nexus Desk…', 'uninstall:'));
+  m.addItem(item('Quit Nexus Desk', 'quit:', 'q'));
+  return m;
+}
+
+// ─── Controller (menu actions, timer, web view delegate) ───────────────────
+
+function sizeBy(tag) {
+  const s = SIZES[tag];
+  const f = panel.frame;
+  // Keep the top edge where it is.
+  panel.setFrameDisplayAnimate($.NSMakeRect(f.origin.x, f.origin.y + f.size.height - s[2], s[1], s[2]), true, true);
+  show();
+}
+
+ObjC.registerSubclass({
+  name: 'NexusDeskController',
+  superclass: 'NSObject',
+  protocols: ['NSMenuDelegate', 'WKUIDelegate'],
+  methods: {
+    'menuNeedsUpdate:': {
+      types: ['void', ['id']],
+      implementation: function (menu) {
+        // Rebuilt on every open so ticks and titles are always current.
+        menu.removeAllItems;
+        const fresh = buildMenu();
+        const items = fresh.itemArray.js;
+        for (let i = 0; i < items.length; i++) {
+          fresh.removeItem(items[i]);
+          menu.addItem(items[i]);
+        }
+      }
+    },
+    'toggle:': { types: ['void', ['id']], implementation: () => toggle() },
+    'openFull:': {
+      types: ['void', ['id']],
+      implementation: () => $.NSWorkspace.sharedWorkspace.openURL($.NSURL.URLWithString(NEXUS_URL))
+    },
+    'reload:': { types: ['void', ['id']], implementation: () => web.reload },
+    'setMode:': {
+      types: ['void', ['id']],
+      implementation: (sender) => {
+        setPref('mode', MODES[sender.tag][0]);
+        applyMode();
+        show();
+      }
+    },
+    'setSize:': { types: ['void', ['id']], implementation: (sender) => sizeBy(sender.tag) },
+    'setOpacity:': {
+      types: ['void', ['id']],
+      implementation: (sender) => {
+        setPref('opacity', OPACITY[sender.tag]);
+        applyMode();
+      }
+    },
+    'toggleAutoHide:': {
+      types: ['void', ['id']],
+      implementation: () => {
+        setPref('autoHide', !pref('autoHide', false));
+        applyMode();
+      }
+    },
+    'setCorner:': {
+      types: ['void', ['id']],
+      implementation: (sender) => {
+        setPref('corner', CORNERS[sender.tag][0]);
+        dwell = 0;
+        armed = true;
+      }
+    },
+    'toggleLogin:': { types: ['void', ['id']], implementation: () => setLogin(!loginEnabled()) },
+    'uninstall:': {
+      types: ['void', ['id']],
+      implementation: () => {
+        $.NSApp.activateIgnoringOtherApps(true);
+        const alert = $.NSAlert.alloc.init;
+        alert.messageText = 'Uninstall Nexus Desk?';
+        alert.informativeText =
+          'Removes the Nexus Desk app and its start-at-login entry. Your tasks are not touched: they stay in Nexus and in your Google Drive backup.';
+        alert.addButtonWithTitle('Uninstall');
+        alert.addButtonWithTitle('Cancel');
+        if (alert.runModal !== 1000) return;
+        setLogin(false);
+        fm.removeItemAtPathError($.NSBundle.mainBundle.bundlePath.js, null);
+        defaults.removePersistentDomainForName(AGENT_LABEL);
+        $.NSApp.terminate(null);
+      }
+    },
+    'quit:': { types: ['void', ['id']], implementation: () => $.NSApp.terminate(null) },
+    'tick:': { types: ['void', ['id']], implementation: () => tick() },
+    // window.open(): Google's sign-in gets its own small window; anything else opens in the
+    // user's browser (e.g. "Open in Nexus" on a task).
+    'webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:': {
+      types: ['id', ['id', 'id', 'id', 'id']],
+      implementation: (wv, cfg, action, features) => {
+        const url = action.request.URL;
+        const href = url.isNil() ? '' : url.absoluteString.js;
+        const host = url.isNil() || url.host.isNil() ? '' : url.host.js;
+        if (href && !/(^|\.)google\.com$/.test(host)) {
+          $.NSWorkspace.sharedWorkspace.openURL(url);
+          return $();
+        }
+        const win = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0, 0, 480, 640), 1 | 2 | 8, 2, false);
+        win.title = 'Sign in · Nexus';
+        win.releasedWhenClosed = false;
+        win.level = 3;
+        const pop = $.WKWebView.alloc.initWithFrameConfiguration(win.contentView.bounds, cfg);
+        pop.autoresizingMask = 2 | 16;
+        pop.customUserAgent = USER_AGENT;
+        pop.UIDelegate = controller;
+        win.contentView.addSubview(pop);
+        win.center;
+        win.makeKeyAndOrderFront(null);
+        popups.push({ win: win, view: pop });
+        return pop;
+      }
+    },
+    'webViewDidClose:': {
+      types: ['void', ['id']],
+      implementation: (wv) => {
+        for (let i = popups.length - 1; i >= 0; i--) {
+          if (popups[i].view.isEqual(wv)) {
+            popups[i].win.orderOut(null);
+            popups.splice(i, 1);
+          }
+        }
+      }
+    }
+  }
+});
+
+// Standard Edit shortcuts (⌘C / ⌘V / ⌘A / ⌘Z) need a main menu, even in a menu-bar app.
+function installMainMenu() {
+  const main = $.NSMenu.alloc.init;
+  const appItem = $.NSMenuItem.alloc.init;
+  const appMenu = $.NSMenu.alloc.init;
+  appMenu.addItem($.NSMenuItem.alloc.initWithTitleActionKeyEquivalent('Hide Nexus', 'performClose:', 'w'));
+  appMenu.addItem(item('Quit Nexus Desk', 'quit:', 'q'));
+  appItem.submenu = appMenu;
+  main.addItem(appItem);
+  const editItem = $.NSMenuItem.alloc.init;
+  const edit = $.NSMenu.alloc.initWithTitle('Edit');
+  [
+    ['Undo', 'undo:', 'z'],
+    ['Redo', 'redo:', 'Z'],
+    ['Cut', 'cut:', 'x'],
+    ['Copy', 'copy:', 'c'],
+    ['Paste', 'paste:', 'v'],
+    ['Select All', 'selectAll:', 'a']
+  ].forEach((x) => edit.addItem($.NSMenuItem.alloc.initWithTitleActionKeyEquivalent(x[0], x[1], x[2])));
+  editItem.submenu = edit;
+  main.addItem(editItem);
+  const viewItem = $.NSMenuItem.alloc.init;
+  const view = $.NSMenu.alloc.initWithTitle('View');
+  view.addItem(item('Reload', 'reload:', 'r'));
+  viewItem.submenu = view;
+  main.addItem(viewItem);
+  $.NSApp.mainMenu = main;
+}
+
+function run() {
+  $.NSApplication.sharedApplication;
+  $.NSApp.setActivationPolicy(1); // accessory: menu bar only, no Dock icon
+  controller = $.NexusDeskController.alloc.init;
+  installMainMenu();
+
+  statusItem = $.NSStatusBar.systemStatusBar.statusItemWithLength(-1);
+  const img = $.NSImage.imageWithSystemSymbolNameAccessibilityDescription('square.grid.2x2.fill', 'Nexus');
+  if (img.isNil()) statusItem.button.title = 'N';
+  else {
+    img.template = true;
+    statusItem.button.image = img;
+  }
+  statusItem.button.toolTip = 'Nexus Desk';
+  makePanel();
+  const menu = buildMenu();
+  menu.delegate = controller;
+  statusItem.menu = menu;
+  show();
+  $.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(TICK_S, controller, 'tick:', null, true);
+}
+
+// Clicking the app again (Finder, Spotlight, login) brings the window back.
+function reopen() {
+  if (panel) show();
+}

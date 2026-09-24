@@ -1,0 +1,164 @@
+/* ─── Calendar ───────────────────────────────────────────────────────────────── */
+.nx-cal .nx-page-header { padding: 4px 8px 4px 4px; }
+.nx-cal .nx-page-title h1 { font-size: 20px; letter-spacing: -0.2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 420px) { .nx-cal .nx-page-title h1 { font-size: 17px; } .nx-cal-today { padding: 0 10px; } }
+.nx-cal-tools { display: flex; align-items: center; gap: 2px; }
+.nx-cal-today { height: 32px; padding: 0 12px; border-radius: 16px; border: 1px solid var(--nx-stroke); font-size: 13px; font-weight: 600; color: var(--nx-textPri); margin-right: 4px; }
+.nx-cal-today:hover { border-color: color-mix(in srgb, var(--nx-accent) 55%, var(--nx-stroke)); }
+
+.nx-cal-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; padding: 0 12px calc(16px + var(--safe-bottom)); gap: 14px; }
+.nx-cal-month { flex: none; touch-action: pan-y; }
+.nx-cal-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); padding: 4px 0 6px; }
+.nx-cal-week span { text-align: center; font-size: 11px; font-weight: 600; color: var(--nx-textTer); text-transform: uppercase; letter-spacing: 0.05em; }
+.nx-cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; will-change: transform, opacity; }
+.nx-cal-day { position: relative; min-height: 48px; border-radius: 12px; padding: 6px 4px; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; outline: none; transition: background-color 140ms, box-shadow 140ms; }
+.nx-cal-day:hover { background: color-mix(in srgb, var(--nx-textPri) 4%, transparent); }
+.nx-cal-day:focus-visible { box-shadow: 0 0 0 2px var(--nx-accent); }
+.nx-cal-day .num { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; font-size: 13px; font-weight: 600; color: var(--nx-textPri); }
+.nx-cal-day.other .num { color: var(--nx-textTer); font-weight: 500; }
+.nx-cal-day.today .num { box-shadow: inset 0 0 0 1.5px var(--nx-accent); color: var(--nx-accent); }
+.nx-cal-day.sel .num { background: var(--nx-accent); color: #fff; box-shadow: none; }
+.nx-cal-day.sel { background: color-mix(in srgb, var(--nx-accent) 8%, transparent); }
+.nx-cal-day.drop { background: color-mix(in srgb, var(--nx-accent) 16%, transparent); box-shadow: inset 0 0 0 1.5px var(--nx-accent); }
+.nx-cal-day .dots { display: flex; gap: 3px; height: 6px; }
+.nx-cal-day .dots i { width: 6px; height: 6px; border-radius: 50%; }
+
+.nx-cal-legend { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 0 0; font-size: 11px; color: var(--nx-textSec); }
+.nx-cal-legend .src { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 12px; background: var(--nx-surfaceEl); border: 1px solid var(--nx-stroke); color: inherit; font: inherit; font-weight: 600; }
+.nx-cal-legend button.src { cursor: pointer; }
+.nx-cal-legend .src.off { opacity: 0.45; text-decoration: line-through; }
+.nx-cal-legend .src.nexus i { background: var(--nx-accent); }
+.nx-cal-legend .src.link { background: none; border-style: dashed; color: var(--nx-accent); }
+.nx-cal-legend i { width: 8px; height: 8px; border-radius: 3px; }
+.nx-cal-row .m b.src { font-weight: 600; color: var(--nx-textSec); }
+.nx-cal-legend b { color: #ff4060; }
+
+.nx-cal-agenda { flex: 1; min-height: 200px; background: var(--nx-surface); border: 1px solid var(--nx-stroke); border-radius: 20px; padding: 14px; display: flex; flex-direction: column; }
+.nx-cal-agenda header { display: flex; align-items: center; gap: 10px; padding: 0 2px 10px; }
+.nx-cal-agenda header > div { flex: 1; min-width: 0; }
+.nx-cal-agenda h2 { font-size: 17px; font-weight: 700; color: var(--nx-textPri); }
+.nx-cal-agenda header p { font-size: 12px; color: var(--nx-textSec); margin-top: 2px; }
+.nx-cal-add { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px 0 10px; border-radius: 17px; background: var(--nx-accent); color: #fff; font-size: 13px; font-weight: 600; }
+.nx-cal-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 24px 0; color: var(--nx-textTer); text-align: center; font-size: 13px; }
+.nx-cal-list { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.nx-cal-row { position: relative; display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 6px 10px 6px 0; border-radius: 14px; background: var(--nx-surfaceEl); cursor: pointer; overflow: hidden; transition: transform 160ms var(--ease-bouncy); }
+.nx-cal-row:active { transform: scale(0.99); }
+.nx-cal-row .bar { align-self: stretch; width: 3px; border-radius: 0 3px 3px 0; background: var(--c); flex: none; }
+.nx-cal-row .ic { display: grid; place-items: center; width: 28px; color: var(--c); flex: none; }
+.nx-cal-row .txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.nx-cal-row .t { font-size: 14px; color: var(--nx-textPri); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nx-cal-row .m { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--nx-textSec); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nx-cal-row.late .m { color: #ff4060; }
+.nx-cal-row.done .t { text-decoration: line-through; opacity: 0.55; }
+.nx-cal-row .go { color: var(--nx-textTer); flex: none; }
+.nx-cal-row.event { cursor: default; }
+.nx-cal-join { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 12px 0 10px; border-radius: 15px; background: var(--c); color: #fff; font-size: 12.5px; font-weight: 700; text-decoration: none; }
+.nx-cal-mk { flex: none; width: 30px; height: 30px; border-radius: 15px; display: grid; place-items: center; color: var(--nx-accent); background: color-mix(in srgb, var(--nx-accent) 12%, transparent); }
+.nx-cal-join:hover { filter: brightness(1.08); }
+.nx-cal-row.event .nx-text-btn { flex: none; font-size: 12px; }
+
+/* Desktop: a real month view (task chips inside each day) with the agenda beside it. */
+@media (min-width: 1024px) {
+  .nx-cal-body { flex-direction: row; align-items: stretch; overflow: hidden; padding: 0 20px 20px; gap: 18px; }
+  .nx-cal-month { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .nx-cal-grid { flex: 1; grid-template-rows: repeat(6, minmax(0, 1fr)); gap: 6px; }
+  .nx-cal-day { min-height: 0; align-items: stretch; padding: 6px; border: 1px solid var(--nx-stroke); background: var(--nx-surface); overflow: hidden; }
+  .nx-cal-day.other { background: transparent; }
+  .nx-cal-day.late { border-color: color-mix(in srgb, #ff4060 40%, var(--nx-stroke)); }
+  .nx-cal-day .num { width: 26px; height: 26px; font-size: 12.5px; }
+  .nx-cal-day .chips { display: flex; flex-direction: column; gap: 3px; min-height: 0; overflow: hidden; }
+  .nx-cal-day .chip { display: block; padding: 2px 6px; border-radius: 6px; font-size: 11px; line-height: 16px; color: var(--nx-textPri); background: color-mix(in srgb, var(--c) 16%, transparent); border-left: 2.5px solid var(--c); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+  .nx-cal-day .chip em { font-style: normal; font-weight: 700; margin-right: 4px; color: color-mix(in srgb, var(--c) 80%, var(--nx-textPri)); }
+  .nx-cal-day .chip.due[draggable='true'] { cursor: grab; }
+  .nx-cal-day .chip.late { --c: #ff4060; }
+  .nx-cal-day .chip.done { opacity: 0.45; text-decoration: line-through; }
+  .nx-cal-day .chip.event { cursor: default; background: color-mix(in srgb, var(--c) 10%, transparent); }
+  .nx-cal-day .more { font-size: 10.5px; color: var(--nx-textSec); padding-left: 6px; }
+  .nx-cal-agenda { flex: none; width: clamp(320px, 28vw, 440px); overflow-y: auto; }
+}
+@media (min-width: 1600px) {
+  .nx-cal-day .chip { font-size: 12px; line-height: 18px; }
+  .nx-cal-row .t { font-size: 15px; }
+}
+
+/* ─── Linked calendars + .ics import sheets ───────────────────────────────────── */
+.nx-linked-body, .nx-import-body { padding: 4px 20px calc(20px + var(--safe-bottom)); display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+.nx-linked-body h2, .nx-import-body h2 { font-size: 20px; font-weight: 700; color: var(--nx-textPri); }
+.nx-linked-body .lead, .nx-import-body .lead, .nx-imp .lead { font-size: 13px; line-height: 1.5; color: var(--nx-textSec); }
+.nx-linked-note { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 14px; background: color-mix(in srgb, var(--nx-accent) 10%, var(--nx-surface)); border: 1px solid color-mix(in srgb, var(--nx-accent) 30%, var(--nx-stroke)); font-size: 12.5px; color: var(--nx-textSec); line-height: 1.45; }
+.nx-linked-note svg { color: var(--nx-accent); flex: none; }
+.nx-linked-list { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.nx-linked-list li { display: flex; align-items: center; gap: 12px; padding: 10px 6px 10px 12px; border-radius: 14px; background: var(--nx-surface); border: 1px solid var(--nx-stroke); }
+.nx-linked-list .swatch { width: 18px; height: 18px; border-radius: 6px; flex: none; }
+.nx-linked-list .txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.nx-linked-list b { font-size: 14px; color: var(--nx-textPri); display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.nx-linked-list .prov { font-style: normal; font-size: 10.5px; font-weight: 700; letter-spacing: 0.02em; padding: 2px 7px; border-radius: 8px; background: var(--nx-surfaceEl); color: var(--nx-textSec); }
+.nx-linked-list small { font-size: 11.5px; color: var(--nx-textSec); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nx-linked-list small.err { color: #ff4060; white-space: normal; }
+.nx-linked-form { display: flex; flex-direction: column; gap: 8px; }
+.nx-input { width: 100%; height: 46px; padding: 0 14px; border-radius: 14px; border: 1px solid var(--nx-stroke); background: var(--nx-surface); color: var(--nx-textPri); font-size: 14px; outline: none; transition: border-color 140ms; }
+.nx-input:focus { border-color: var(--nx-accent); }
+.nx-linked-form .err, .nx-import-body .err, .nx-imp .err { font-size: 12.5px; color: #ff4060; line-height: 1.45; }
+.nx-linked-help-toggle { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; font-size: 13px; font-weight: 600; color: var(--nx-accent); }
+.nx-linked-help { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border-radius: 14px; background: var(--nx-surface); font-size: 12.5px; line-height: 1.5; }
+.nx-linked-help dt { font-weight: 700; color: var(--nx-textPri); }
+.nx-linked-help dd { color: var(--nx-textSec); }
+.nx-linked-help p { color: var(--nx-textTer); }
+
+.nx-import-bar { display: flex; align-items: center; gap: 4px; }
+.nx-import-bar .grow { flex: 1; }
+.nx-import-list { list-style: none; display: flex; flex-direction: column; gap: 4px; max-height: 44vh; overflow-y: auto; }
+.nx-import-list li { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 12px; background: var(--nx-surface); cursor: pointer; }
+.nx-import-list li.on { background: color-mix(in srgb, var(--nx-accent) 9%, var(--nx-surface)); }
+.nx-import-list .txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.nx-import-list b { font-size: 13.5px; font-weight: 600; color: var(--nx-textPri); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nx-import-list small { font-size: 11.5px; color: var(--nx-textSec); }
+.nx-import-list.compact { max-height: none; }
+.nx-import-list.compact li { cursor: default; padding: 8px 12px; }
+.nx-import-list .pdot { width: 8px; height: 8px; border-radius: 50%; background: var(--c); flex: none; }
+.nx-import-list li.more { justify-content: center; color: var(--nx-textSec); font-size: 12px; background: transparent; }
+.nx-import-foot { display: flex; flex-direction: column; gap: 10px; padding-top: 4px; }
+.nx-import-foot .lbl, .nx-imp-field .lbl { font-size: 12px; font-weight: 700; color: var(--nx-textSec); text-transform: uppercase; letter-spacing: 0.05em; }
+
+/* ─── Sheet import wizard ─────────────────────────────────────────────────────── */
+.nx-imp-steps { display: flex; justify-content: center; gap: 6px; padding: 0 16px 12px; flex-wrap: wrap; }
+.nx-imp-steps span { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px 5px 6px; border-radius: 16px; font-size: 12px; font-weight: 600; color: var(--nx-textTer); background: var(--nx-surface); }
+.nx-imp-steps i { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; font-style: normal; font-size: 11px; background: var(--nx-stroke); color: var(--nx-textSec); }
+.nx-imp-steps .on { color: var(--nx-textPri); background: color-mix(in srgb, var(--nx-accent) 14%, var(--nx-surface)); }
+.nx-imp-steps .on i, .nx-imp-steps .done i { background: var(--nx-accent); color: #fff; }
+.nx-imp-steps .done { color: var(--nx-textSec); }
+.nx-imp-body { display: flex; flex-direction: column; gap: 18px; padding-top: 4px; }
+.nx-imp-body > * { width: 100%; box-sizing: border-box; }
+.nx-imp-field { display: flex; flex-direction: column; gap: 8px; }
+.nx-imp-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.nx-imp-chip { height: 34px; padding: 0 14px; border-radius: 17px; border: 1px solid var(--nx-stroke); background: var(--nx-surface); color: var(--nx-textPri); font-size: 13px; }
+.nx-imp-chip.on { border-color: var(--nx-accent); background: color-mix(in srgb, var(--nx-accent) 14%, var(--nx-surface)); color: var(--nx-accent); font-weight: 600; }
+.nx-imp-cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.nx-imp-col { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--nx-stroke); background: var(--nx-surface); text-align: left; min-width: 0; }
+.nx-imp-col b { font-size: 13px; color: var(--nx-textPri); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nx-imp-col small { font-size: 11px; color: var(--nx-textTer); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nx-imp-col.on { border-color: var(--nx-accent); background: color-mix(in srgb, var(--nx-accent) 12%, var(--nx-surface)); }
+.nx-imp-col.on b { color: var(--nx-accent); }
+.nx-imp-switch { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 14px; background: var(--nx-surface); cursor: pointer; }
+.nx-imp-switch span { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.nx-imp-switch b { font-size: 14px; color: var(--nx-textPri); }
+.nx-imp-switch small { font-size: 12px; color: var(--nx-textSec); }
+.nx-imp .hint { font-size: 12px; line-height: 1.45; color: var(--nx-textTer); }
+.nx-imp-table-wrap { overflow-x: auto; border-radius: 14px; border: 1px solid var(--nx-stroke); }
+.nx-imp-table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.nx-imp-table th, .nx-imp-table td { padding: 8px 10px; text-align: left; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid var(--nx-stroke); }
+.nx-imp-table th { color: var(--nx-textSec); font-weight: 700; background: var(--nx-surface); position: sticky; top: 0; }
+.nx-imp-table td { color: var(--nx-textPri); }
+.nx-imp-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+.nx-imp-stats div { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border-radius: 14px; background: var(--nx-surface); }
+.nx-imp-stats b { font-size: 24px; font-weight: 700; color: var(--nx-textPri); }
+.nx-imp-stats span { font-size: 12px; color: var(--nx-textSec); }
+.nx-imp-stats .warn b { color: #ffaa00; }
+.nx-imp-invalid summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--nx-textSec); }
+.nx-imp-invalid ul { list-style: none; margin-top: 8px; font-size: 12px; color: var(--nx-textTer); display: flex; flex-direction: column; gap: 4px; }
+.nx-imp-actions { display: flex; align-items: center; gap: 8px; padding: 10px 16px calc(12px + var(--safe-bottom)); border-top: 1px solid var(--nx-stroke); }
+.nx-imp-actions .grow { flex: 1; }
+.nx-imp-actions .nx-primary { height: 44px; }
+@media (min-width: 1024px) {
+  .nx-imp-actions { padding: 14px max(24px, calc((100% - 680px) / 2)); }
+}

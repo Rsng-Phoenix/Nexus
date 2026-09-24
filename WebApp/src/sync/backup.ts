@@ -1,4 +1,5 @@
 import type { Task } from '../types';
+import { clampAlertTime, DEFAULT_DUE_ALERT_TIME, formatDueAlerts, isIsoDate, parseDueAlerts } from '../calendar/due';
 
 const BACKUP_VERSION = 1;
 /**
@@ -48,7 +49,10 @@ function taskToSyncJson(t: Task): Record<string, unknown> {
     deletedAt: t.deletedAt,
     completedAt: t.completedAt,
     skippedAt: t.skippedAt,
-    archivedAt: t.archivedAt ?? 0
+    archivedAt: t.archivedAt ?? 0,
+    dueDate: t.dueDate ?? '',
+    dueAlerts: t.dueAlerts ?? '',
+    dueAlertTime: t.dueAlertTime ?? DEFAULT_DUE_ALERT_TIME
   };
 }
 
@@ -93,7 +97,10 @@ export function syncJsonToTask(o: Record<string, unknown>): Task {
     deletedAt: Number(o.deletedAt ?? 0),
     completedAt: Number(o.completedAt ?? 0),
     skippedAt: Number(o.skippedAt ?? 0),
-    archivedAt: Number(o.archivedAt ?? 0)
+    archivedAt: Number(o.archivedAt ?? 0),
+    dueDate: isIsoDate(String(o.dueDate ?? '')) ? String(o.dueDate) : '',
+    dueAlerts: formatDueAlerts(parseDueAlerts(String(o.dueAlerts ?? ''))),
+    dueAlertTime: clampAlertTime(Number(o.dueAlertTime ?? DEFAULT_DUE_ALERT_TIME))
   };
 }
 

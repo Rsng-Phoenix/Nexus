@@ -1,27 +1,44 @@
 import type { JSX } from 'preact';
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { isPc } from '../state/viewport';
+import { getSettings } from '../settings/store';
+import { dueChipLabel } from '../calendar/deadline';
 import { addTask } from '../state/store';
 import type { Priority } from '../types';
 import { PRIORITIES, PRIORITY_META } from '../types';
 import { Icon } from './icons';
 import { Menu, Sheet } from './kit';
 
-export function AddTaskSheet({ priority: initial, locked, leaving, onExited, onDismiss }: {
+export function AddTaskSheet({ priority: initial, locked, text: initialText = '', due, notes: initialNotes = '', leaving, onExited, onDismiss }: {
   priority: Priority;
   locked?: boolean;
+  /** Keystroke that opened the sheet from the keyboard picker. */
+  text?: string;
+  /** Deadline for the new task (from the calendar), ISO day. */
+  due?: string;
+  /** Starting notes (e.g. the meeting link of a calendar event). */
+  notes?: string;
   leaving: boolean;
   onExited: () => void;
   onDismiss: () => void;
 }) {
   const [priority, setPriority] = useState<Priority>(initial);
-  const [title, setTitle] = useState('');
-  const [notes, setNotes] = useState('');
+  const [title, setTitle] = useState(initialText);
+  const [notes, setNotes] = useState(initialNotes);
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const meta = PRIORITY_META[priority];
 
-  useEffect(() => {
-    // Focus after the slide-in starts so mobile keyboards open reliably.
-    const t = setTimeout(() => titleRef.current?.focus(), 60);
+  useLayoutEffect(() => {
+    // With a keyboard, focus at once so fast typing isn't lost; on touch, after the slide-in
+    // starts so mobile keyboards open reliably.
+    const el = titleRef.current;
+    if (!el) return;
+    if (isPc.value || initialText) {
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+      return;
+    }
+    const t = setTimeout(() => el.focus(), 60);
     return () => clearTimeout(t);
   }, []);
 
@@ -36,7 +53,9 @@ export function AddTaskSheet({ priority: initial, locked, leaving, onExited, onD
     else titleRef.current?.focus();
     // Pasting several lines creates one task per line (same as Android).
     void (async () => {
-      for (const [i, line] of lines.entries()) await addTask(line, priority, i === 0 ? body : '');
+      const s = getSettings();
+      const extra = due ? { dueDate: due, dueAlerts: s.defaultDueAlerts, dueAlertTime: s.defaultDueAlertTime } : {};
+      for (const [i, line] of lines.entries()) await addTask(line, priority, i === 0 ? body : '', extra);
     })();
   };
 
@@ -104,6 +123,11 @@ export function AddTaskSheet({ priority: initial, locked, leaving, onExited, onD
                 }
               }))}
             />
+          )}
+          {due && (
+            <span class="nx-due-badge today nx-add-due">
+              <Icon name="calendar" size={12} /> {dueChipLabel({ dueDate: due })}
+            </span>
           )}
           <span class="grow" />
           <button class="nx-send press" aria-label="Save task" onClick={() => save(true)}>

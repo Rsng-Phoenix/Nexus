@@ -46,3 +46,64 @@
 .nx-vault-empty .head { margin-top: 14px; font-size: 15px; font-weight: 600; color: var(--nx-textPri); }
 .nx-vault-empty .cap { margin-top: 4px; font-size: 12px; color: var(--nx-textSec); }
 @keyframes nx-vault-fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* ─── Sections + desktop two-pane layout ─────────────────────────────────────── */
+.nx-set-layout { flex: 1; min-height: 0; display: flex; }
+.nx-set-scroll { flex: 1; }
+.nx-set-nav { display: none; }
+.nx-set-sec { scroll-margin-top: 8px; }
+.nx-pause-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.nx-help h3 { font-size: 14px; font-weight: 700; color: var(--nx-textPri); margin: 12px 0 4px; }
+.nx-help h3:first-child { margin-top: 0; }
+.nx-help p { font-size: 13px; line-height: 1.55; color: var(--nx-textSec); }
+.nx-keys { display: flex; flex-direction: column; gap: 8px; min-width: 280px; }
+.nx-keys div { display: flex; align-items: center; gap: 12px; }
+.nx-keys dt { display: flex; gap: 4px; min-width: 96px; }
+.nx-keys dd { font-size: 13px; color: var(--nx-textSec); }
+@media (min-width: 1024px) {
+  .nx-set-layout { padding: 0 24px 0 16px; gap: 24px; }
+  .nx-set-nav { display: flex; flex-direction: column; gap: 2px; width: 240px; flex: none; padding: 8px 0; overflow-y: auto; }
+  .nx-set-nav button { display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 14px; border-radius: 12px; font-size: 13.5px; font-weight: 500; color: var(--nx-textSec); text-align: left; transition: background-color 140ms, color 140ms; }
+  .nx-set-nav button:hover { background: var(--nx-surface); color: var(--nx-textPri); }
+  .nx-set-nav button.on { background: color-mix(in srgb, var(--nx-accent) 13%, var(--nx-surface)); color: var(--nx-textPri); font-weight: 600; }
+  .nx-set-nav button.on svg { color: var(--nx-accent); }
+  .nx-set-scroll.narrow > * { margin-left: 0; }
+}
+
+/* ─── Categories ─────────────────────────────────────────────────────────────── */
+.nx-set-account { width: 100%; display: flex; align-items: center; gap: 14px; margin-top: 8px; padding: 14px 12px 14px 16px; border-radius: 20px; background: var(--nx-surface); border: 0.5px solid var(--nx-stroke); text-align: left; }
+.nx-set-account .txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.nx-set-account b { font-size: 16px; font-weight: 700; color: var(--nx-textPri); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nx-set-account small { font-size: 12px; color: var(--nx-textSec); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nx-set-account.compact { margin: 0 0 10px; padding: 10px 8px 10px 10px; border-radius: 14px; gap: 10px; }
+.nx-set-account.compact b { font-size: 13.5px; }
+.nx-set-account.compact small { font-size: 11px; }
+.nx-set-account.on { border-color: color-mix(in srgb, var(--nx-accent) 55%, var(--nx-stroke)); background: color-mix(in srgb, var(--nx-accent) 9%, var(--nx-surface)); }
+.nx-set-note { font-size: 12px; line-height: 1.5; color: var(--nx-textSec); padding: 10px 8px 0; }
+.nx-set-one { padding-top: 6px; }
+.nx-set-head { display: flex; align-items: center; gap: 14px; padding: 14px 4px 4px; }
+.nx-set-head h2 { font-size: 20px; font-weight: 700; color: var(--nx-textPri); }
+.nx-set-head p { font-size: 12.5px; color: var(--nx-textSec); margin-top: 2px; }
+.nx-set-head + .nx-group, .nx-set-head + .nx-desk { margin-top: 14px; }
+.nx-set-nav .grp { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
+.nx-set-nav .glabel { font-size: 10.5px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--nx-textTer); padding: 6px 14px 4px; }
+.nx-set-nav .nx-settings-footer { padding: 8px 14px; text-align: left; }
+
+/* Nexus Desk install cards */
+.nx-desk { border-radius: 18px; padding: 16px; background: var(--nx-surface); border: 0.5px solid var(--nx-stroke); display: flex; flex-direction: column; gap: 12px; }
+.nx-desk .head { display: flex; align-items: center; gap: 12px; }
+.nx-desk .head b { display: block; font-size: 15px; font-weight: 700; color: var(--nx-textPri); }
+.nx-desk .head small { font-size: 12px; color: var(--nx-textSec); }
+.nx-desk .feats { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; font-size: 13px; line-height: 1.45; color: var(--nx-textSec); }
+.nx-desk .note { font-size: 11.5px; line-height: 1.5; color: var(--nx-textTer); }
+.nx-desk .note code { font-size: 10.5px; word-break: break-all; }
+.nx-cmd .lbl { display: block; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--nx-textSec); margin-bottom: 6px; }
+.nx-cmd .box { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 12px; border-radius: 12px; background: var(--nx-bg); border: 1px solid var(--nx-stroke); }
+.nx-cmd code { flex: 1; min-width: 0; font: 500 12px/1.45 ui-monospace, 'SF Mono', Menlo, Consolas, monospace; color: var(--nx-textPri); word-break: break-all; user-select: all; }
+.nx-cmd button { flex: none; width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; color: var(--nx-accent); background: color-mix(in srgb, var(--nx-accent) 12%, transparent); }
+.nx-desk-other { margin-top: 10px; }
+.nx-desk-other summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--nx-accent); padding: 6px 6px; list-style: none; }
+.nx-desk-other summary::-webkit-details-marker { display: none; }
+.nx-desk-other summary::before { content: '+ '; }
+.nx-desk-other[open] summary::before { content: '− '; }
+.nx-set-inline-note { font-size: 11.5px; color: var(--nx-textTer); padding: 0 16px 12px 60px; }

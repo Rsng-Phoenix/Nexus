@@ -1,6 +1,7 @@
 import { vibrateTap } from './lib/haptics';
 import { formatReminderLabel } from './reminder-label';
 import type { Priority, Task } from './types';
+import { DEFAULT_DUE_ALERT_TIME } from './calendar/due';
 
 function clearReminder(t: Task, history: string): Task {
   return {
@@ -51,7 +52,21 @@ export function newTask(description: string, priority: Priority): Omit<Task, 'id
     deletedAt: 0,
     completedAt: 0,
     skippedAt: 0,
-    archivedAt: 0
+    archivedAt: 0,
+    dueDate: '',
+    dueAlerts: '',
+    dueAlertTime: DEFAULT_DUE_ALERT_TIME
+  };
+}
+
+/** Rows stored before 3.7 have no deadline fields. */
+export function withTaskDefaults(t: Task): Task {
+  if (typeof t.dueDate === 'string' && typeof t.dueAlerts === 'string' && Number.isFinite(t.dueAlertTime)) return t;
+  return {
+    ...t,
+    dueDate: typeof t.dueDate === 'string' ? t.dueDate : '',
+    dueAlerts: typeof t.dueAlerts === 'string' ? t.dueAlerts : '',
+    dueAlertTime: Number.isFinite(t.dueAlertTime) ? t.dueAlertTime : DEFAULT_DUE_ALERT_TIME
   };
 }
 

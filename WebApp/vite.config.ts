@@ -41,7 +41,7 @@ export default defineConfig({
       strategies: 'injectManifest',
       srcDir: 'src',
       filename: 'sw.ts',
-      injectManifest: { globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'] },
+      injectManifest: { globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2,json}'] },
       includeAssets: ['icons/icon.svg'],
       manifest: {
         name: 'Nexus',
@@ -58,8 +58,44 @@ export default defineConfig({
           { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' },
           { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
           { src: 'icons/icon.svg', sizes: 'any', type: 'image/svg+xml' }
+        ],
+        // Right-click the Dock / taskbar icon (installed app).
+        shortcuts: [
+          { name: 'New task', short_name: 'New task', url: './?action=add', icons: [{ src: 'icons/icon-192.png', sizes: '192x192' }] },
+          { name: 'Calendar', short_name: 'Calendar', url: './?open=calendar', icons: [{ src: 'icons/icon-192.png', sizes: '192x192' }] }
+        ],
+        // Windows 11 Widgets board (installed from Edge). Rendered by the service worker.
+        widgets: [
+          {
+            name: 'Nexus · Today',
+            short_name: 'Today',
+            description: 'Overdue and due-today tasks and today’s reminders. Tick them off from the widget.',
+            tag: 'nexus-today',
+            template: 'nexus-today',
+            ms_ac_template: 'widgets/today.json',
+            data: 'widgets/today-data.json',
+            type: 'application/json',
+            screenshots: [{ src: 'icons/icon-512.png', sizes: '512x512', label: 'Nexus Today widget' }],
+            icons: [{ src: 'icons/icon-192.png', sizes: '192x192' }],
+            auth: false,
+            update: 900
+          },
+          {
+            name: 'Nexus · Matrix',
+            short_name: 'Matrix',
+            description: 'Your four priorities at a glance, with the top tasks in each.',
+            tag: 'nexus-matrix',
+            template: 'nexus-matrix',
+            ms_ac_template: 'widgets/matrix.json',
+            data: 'widgets/matrix-data.json',
+            type: 'application/json',
+            screenshots: [{ src: 'icons/icon-512.png', sizes: '512x512', label: 'Nexus Matrix widget' }],
+            icons: [{ src: 'icons/icon-192.png', sizes: '192x192' }],
+            auth: false,
+            update: 900
+          }
         ]
-      },
+      } as Record<string, unknown>,
     })
   ]
 });

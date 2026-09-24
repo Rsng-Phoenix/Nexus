@@ -53,6 +53,8 @@ export const recentlyDeleted = computed(() => {
 
 export async function reload(): Promise<void> {
   allTasks.value = await db.getAllTasksIncludingDeleted();
+  // Rows can change outside the store (sync, account switch): reminders re-derive.
+  afterWriteHooks.forEach((f) => f());
 }
 
 /** Optimistic write: the UI updates this frame, IndexedDB and Drive follow. */
@@ -81,8 +83,8 @@ const now = () => Date.now();
 
 // ─── Actions (mirror Android TaskViewModel) ────────────────────────────────────
 
-export async function addTask(description: string, priority: Priority, notes = ''): Promise<Task> {
-  const row = { ...newTask(description.trim(), priority), notes, position: 2147483647 };
+export async function addTask(description: string, priority: Priority, notes = '', extra: Partial<Task> = {}): Promise<Task> {
+  const row = { ...newTask(description.trim(), priority), notes, position: 2147483647, ...extra };
   const saved = await db.insertTask(row);
   allTasks.value = [...allTasks.value, saved];
   afterWrite();
@@ -180,4 +182,80 @@ export async function insertTutorialDemos(): Promise<void> {
 export async function cleanupTutorialDemos(): Promise<void> {
   await db.deleteTutorialDemos();
   await reload();
+}
+
+export type ImportRow = Pick<Task, 'taskUuid' | 'description' | 'notes' | 'priority'> & Partial<Task>;
+export type ImportResult = { added: number; updated: number; skipped: number; undo: () => Promise<void> };
+
+/**
+ * Adds imported tasks by their deterministic uuid: new ones are inserted, ones already here are
+ * updated in place (re-importing never duplicates), and ones the user deleted are left deleted.
+ * One transaction for the whole batch; `undo` puts everything back as it was.
+ */
+export async function importTasks(rows: ImportRow[]): Promise<ImportResult> {
+  const all = await db.getAllTasksIncludingDeleted();
+  const byUuid = new Map(all.map((t) => [t.taskUuid, t]));
+  // Rows removed by undoing an earlier import may come back; rows the user deleted may not.
+  const undone = new Set<string>(JSON.parse((await db.getMeta('import_undone')) || '[]') as string[]);
+  const ts = now();
+  const inserts: Array<Omit<Task, 'id'>> = [];
+  const updates: Task[] = [];
+  const before: Task[] = [];
+  let skipped = 0;
+  const seen = new Set<string>();
+  for (const r of rows) {
+    // The same uuid twice in one batch would violate the unique index and abort everything.
+    if (seen.has(r.taskUuid)) {
+      skipped++;
+      continue;
+    }
+    seen.add(r.taskUuid);
+    const cur = byUuid.get(r.taskUuid);
+    if (!cur) {
+      inserts.push({ ...newTask(r.description, r.priority), ...r, position: 2147483647, createdAt: ts, updatedAt: ts });
+      continue;
+    }
+    if (cur.deletedAt > 0 && !undone.has(cur.taskUuid)) {
+      skipped++; // deleted on purpose: an import must not bring it back
+      continue;
+    }
+    if (cur.deletedAt > 0) {
+      undone.delete(cur.taskUuid);
+      before.push(cur);
+      updates.push({ ...cur, ...r, id: cur.id, deletedAt: 0, updatedAt: ts });
+      continue;
+    }
+    const next = { ...cur, ...r, id: cur.id, position: cur.position, updatedAt: ts };
+    const changed = (['description', 'notes', 'priority', 'dueDate', 'dueAlerts', 'dueAlertTime', 'reminderTime'] as const).some(
+      (k) => k in r && next[k] !== cur[k]
+    );
+    if (!changed) {
+      skipped++;
+      continue;
+    }
+    before.push(cur);
+    updates.push(next);
+  }
+  await db.putMany([...inserts, ...updates]);
+  await db.setMeta('import_undone', JSON.stringify([...undone].slice(-10_000)));
+  await reload();
+  afterWrite();
+  // Rows this import created or brought back: an undo removes them, and a later import may revive them.
+  const addedUuids = new Set([...inserts.map((i) => i.taskUuid), ...before.filter((b) => b.deletedAt > 0).map((b) => b.taskUuid)]);
+  return {
+    added: inserts.length,
+    updated: updates.length,
+    skipped,
+    undo: async () => {
+      const t2 = now();
+      const current = await db.getAllTasksIncludingDeleted();
+      const removed = current.filter((t) => addedUuids.has(t.taskUuid)).map((t) => ({ ...t, deletedAt: t2, updatedAt: t2 }));
+      await db.putMany([...removed, ...before.map((b) => ({ ...b, updatedAt: t2 }))]);
+      const list = new Set<string>(JSON.parse((await db.getMeta('import_undone')) || '[]') as string[]);
+      addedUuids.forEach((u) => list.add(u));
+      await db.setMeta('import_undone', JSON.stringify([...list].slice(-10_000)));
+      await reload();
+      afterWrite();
+    }
+  };
 }

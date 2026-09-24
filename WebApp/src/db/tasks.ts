@@ -1,5 +1,6 @@
 import type { Task } from '../types';
 import { SYNC_TOMBSTONE_RETENTION_MS } from '../sync/backup';
+import { withTaskDefaults } from '../task-utils';
 
 const DB_NAME = 'nexus_web';
 const STORE = 'tasks';
@@ -30,7 +31,7 @@ export async function getAllTasksIncludingDeleted(): Promise<Task[]> {
   return new Promise((resolve, reject) => {
     const t = db.transaction(STORE, 'readonly');
     const req = t.objectStore(STORE).getAll();
-    req.onsuccess = () => resolve(req.result as Task[]);
+    req.onsuccess = () => resolve((req.result as Task[]).map(withTaskDefaults));
     req.onerror = () => reject(req.error);
   });
 }
@@ -237,5 +238,67 @@ export async function deleteTutorialDemos(): Promise<void> {
     for (const row of all) if (row.taskUuid.startsWith('nexus-tutorial-')) store.delete(row.id);
     t.oncomplete = () => resolve();
     t.onerror = () => reject(t.error);
+  });
+}
+
+/** Any structured-cloneable value (e.g. a non-extractable CryptoKey) in the meta store. */
+export async function getMetaValue<T>(key: string): Promise<T | undefined> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(META, 'readonly').objectStore(META).get(key);
+    req.onsuccess = () => resolve(req.result as T | undefined);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function setMetaValue(key: string, value: unknown): Promise<void> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(META, 'readwrite').objectStore(META).put(value, key);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function deleteMeta(key: string): Promise<void> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(META, 'readwrite').objectStore(META).delete(key);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+/**
+ * Removes every task row from this device, tombstones included, so nothing from one Google
+ * account can leak into another account's Drive. Only used when switching or leaving an account.
+ */
+export async function wipeAllTasks(): Promise<void> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const t = db.transaction(STORE, 'readwrite');
+    t.objectStore(STORE).clear();
+    t.oncomplete = () => resolve();
+    t.onerror = () => reject(t.error);
+  });
+}
+
+/** Writes many rows in one transaction (imports). Rows with id 0 are inserted. */
+export async function putMany(rows: Array<Task | Omit<Task, 'id'>>): Promise<void> {
+  if (!rows.length) return;
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const t = db.transaction(STORE, 'readwrite');
+    const store = t.objectStore(STORE);
+    for (const r of rows) {
+      if ('id' in r && r.id > 0) store.put(r);
+      else {
+        const { id: _id, ...rest } = r as Task;
+        store.add(rest);
+      }
+    }
+    t.oncomplete = () => resolve();
+    t.onerror = () => reject(t.error);
+    t.onabort = () => reject(t.error);
   });
 }

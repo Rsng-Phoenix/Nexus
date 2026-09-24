@@ -9,6 +9,8 @@ preview_urls = false
 [vars]
 ALLOWED_ORIGINS = "https://rsng-phoenix.github.io,http://localhost:5173,http://localhost:4173"
 VAPID_SUBJECT = "mailto:priyanshupradhan0204@gmail.com"
+# Public OAuth client id (same as the web app). The secret is a Cloudflare secret, never here.
+GOOGLE_CLIENT_ID = "273347997748-6nmu1ji56r2of8f7604fpcbr94hu9qm9.apps.googleusercontent.com"
 
 [triggers]
 crons = ["* * * * *"]

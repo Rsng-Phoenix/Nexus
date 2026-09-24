@@ -75,13 +75,65 @@ function setEditContent(el: HTMLElement, block: NoteBlock, baseSize: number): vo
   } else {
     el.textContent = block.text;
   }
+  ensureTail(el);
+}
+
+/**
+ * Text of an editable line. Line breaks inside a text block are real "\n" characters in text
+ * nodes (so selection offsets match the stored text); a trailing <br> only makes a final empty
+ * line visible and is not part of the text.
+ */
+function readEditText(el: HTMLElement): string {
+  let out = '';
+  const nodes: Node[] = [];
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n);
+  nodes.forEach((n, i) => {
+    if (n.nodeType === Node.TEXT_NODE) out += (n as Text).data;
+    else if (n.nodeName === 'BR') {
+      if (i < nodes.length - 1) out += '\n';
+    } else if ((n.nodeName === 'DIV' || n.nodeName === 'P') && out && !out.endsWith('\n')) {
+      out += '\n'; // a browser-made line (e.g. dropped HTML)
+    }
+  });
+  return out.replace(/\u200b/g, '');
+}
+
+/** Keep a trailing <br> when the text ends with a line break, so the empty last line shows. */
+function ensureTail(el: HTMLElement): void {
+  const last = el.lastChild;
+  const needs = readEditText(el).endsWith('\n');
+  const hasTail = last?.nodeName === 'BR';
+  if (needs && !hasTail) el.appendChild(document.createElement('br'));
+}
+
+/** Insert plain text at the caret (replacing any selection) inside [el]. */
+function insertAtCaret(el: HTMLElement, text: string): void {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return;
+  const range = sel.getRangeAt(0);
+  if (!el.contains(range.startContainer)) return;
+  range.deleteContents();
+  // An empty line holds only a placeholder <br>; replace it.
+  if (el.childNodes.length === 1 && el.firstChild?.nodeName === 'BR') el.textContent = '';
+  const node = document.createTextNode(text);
+  if (el.childNodes.length === 0) el.appendChild(node);
+  else range.insertNode(node);
+  const after = document.createRange();
+  after.setStartAfter(node);
+  after.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(after);
+  el.normalize();
+  ensureTail(el);
+  el.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 export function renderNotesEditor(
   container: HTMLElement,
   rawNotes: string,
   onChange: (storage: string) => void
-): { getBlocks: () => NoteBlock[]; setBlocks: (b: NoteBlock[]) => void } {
+): { focusEnd: () => void; getBlocks: () => NoteBlock[]; setBlocks: (b: NoteBlock[]) => void } {
   let blocks = fromStorage(rawNotes);
   let composer = { bold: false, underline: false, scale: 1 };
   let editingId: string | null = null;
@@ -108,8 +160,13 @@ export function renderNotesEditor(
       if (caretAtEnd) {
         const sel = window.getSelection();
         const range = document.createRange();
-        range.selectNodeContents(row);
-        range.collapse(false);
+        // Before the trailing <br> (if any), so typing continues the last line.
+        if (row.lastChild?.nodeName === 'BR') range.setStartBefore(row.lastChild);
+        else {
+          range.selectNodeContents(row);
+          range.collapse(false);
+        }
+        range.collapse(true);
         sel?.removeAllRanges();
         sel?.addRange(range);
       }
@@ -257,7 +314,9 @@ export function renderNotesEditor(
         const liveIdx = indexOf(block.id);
         if (liveIdx < 0) return;
         let live = blocks[liveIdx];
-        live = { ...live, text: el.innerText.replace(/\n/g, '') };
+        const raw = readEditText(el);
+        // Text blocks keep their line breaks (same as Android); list items are single lines.
+        live = { ...live, text: live.type === 'TEXT' ? raw : raw.replace(/\n/g, '') };
         if (!live.text && live.type !== 'TEXT') {
           live = {
             ...live,
@@ -273,9 +332,13 @@ export function renderNotesEditor(
         const liveIdx = indexOf(block.id);
         if (liveIdx < 0) return;
         const live = blocks[liveIdx];
-        if (e.key === 'Enter' && !e.shiftKey) {
-          if (live.type === 'TEXT') return;
+        if (e.key === 'Enter' && !e.isComposing) {
           e.preventDefault();
+          if (live.type === 'TEXT') {
+            // Enter and Shift+Enter both start a new line inside the description.
+            insertAtCaret(el, '\n');
+            return;
+          }
           editingId = null;
           insertAfter(liveIdx, live.type);
         }
@@ -296,6 +359,28 @@ export function renderNotesEditor(
           }
         }
       });
+      el.addEventListener('paste', (e) => {
+        const text = e.clipboardData?.getData('text/plain');
+        if (text == null) return;
+        e.preventDefault(); // never paste foreign HTML/styles into a note
+        const clean = text.replace(/\r\n?/g, '\n');
+        const liveIdx = indexOf(block.id);
+        const live = blocks[liveIdx];
+        if (!live || live.type === 'TEXT' || !clean.includes('\n')) {
+          insertAtCaret(el, live && live.type !== 'TEXT' ? clean.replace(/\n/g, ' ') : clean);
+          return;
+        }
+        // Several lines into a list: one item per line.
+        const [first, ...rest] = clean.split('\n');
+        insertAtCaret(el, first);
+        const at = indexOf(block.id);
+        const added = rest.filter((l) => l.trim()).map((l) => ({ ...newBlock(live.type), text: l.trim() }));
+        blocks.splice(at + 1, 0, ...added);
+        editingId = null;
+        flushStorage();
+        draw();
+        focusBlock(added[added.length - 1]?.id ?? block.id);
+      });
       row.appendChild(el);
       container.appendChild(row);
     });
@@ -305,12 +390,35 @@ export function renderNotesEditor(
   let activeId: string | null = blocks[0]?.id ?? null;
   draw();
 
+  /** Put the caret at the end of the line nearest to [y] (or the last line). */
+  const focusNear = (y?: number): void => {
+    const lines = Array.from(container.querySelectorAll<HTMLElement>('.nx-note-line'));
+    const hit =
+      y == null
+        ? undefined
+        : lines.find((l) => {
+            const r = l.getBoundingClientRect();
+            return y >= r.top && y <= r.bottom;
+          });
+    const line = hit ?? lines[lines.length - 1];
+    const id = line?.dataset.block;
+    if (id) focusBlock(id);
+  };
+
+  // Tapping anywhere in the description (not just on the first line) starts typing.
   container.addEventListener('click', (e) => {
-    const edit = (e.target as HTMLElement).closest('.nx-note-edit');
-    if (edit) (edit as HTMLElement).focus();
+    const t = e.target as HTMLElement;
+    const edit = t.closest('.nx-note-edit');
+    if (edit) {
+      (edit as HTMLElement).focus();
+      return;
+    }
+    if (t.closest('input, button')) return;
+    focusNear(e.clientY);
   });
 
   return {
+    focusEnd: () => focusNear(),
     getBlocks: () => blocks,
     setBlocks: (b) => {
       blocks = b;

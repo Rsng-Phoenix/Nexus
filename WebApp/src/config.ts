@@ -4,4 +4,4 @@
  */
 export const PUSH_WORKER_URL = 'https://nexus-push.priyanshupradhan0204.workers.dev';
 
-export const APP_VERSION = '3.6';
+export const APP_VERSION = '3.7';

@@ -1,4 +1,5 @@
 import '../styles/tour.css';
+import { APP_VERSION } from '../config';
 import { useEffect, useState } from 'preact/hooks';
 import { nexusLogoHtml } from '../ui/nexus-logo';
 import { reducedMotion } from './motion';
@@ -40,7 +41,7 @@ export function Splash({ onDone }: { onDone: () => void }) {
       </div>
       <div class="nx-splash-credits">
         <div class="nx-splash-dev">Developed by Priyanshu Pradhan</div>
-        <div class="nx-splash-ver">v3.6 · 2025 - 2026</div>
+        <div class="nx-splash-ver">v{APP_VERSION} · 2025 - 2026</div>
       </div>
     </div>
   );

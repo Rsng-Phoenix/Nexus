@@ -8,18 +8,24 @@ import type { Priority } from '../types';
  * in the same order as the Android app (vault → settings → about → detail → full screen → input).
  */
 export type Layer =
-  | { kind: 'add'; priority: Priority; locked?: boolean }
+  | { kind: 'add'; priority: Priority; locked?: boolean; text?: string; due?: string; notes?: string }
+  | { kind: 'pick' }
   | { kind: 'detail'; taskId: number }
   | { kind: 'full'; priority: Priority }
-  | { kind: 'settings' }
+  | { kind: 'settings'; cat?: string }
   | { kind: 'vault'; which: 'archived' | 'deleted' }
   | { kind: 'about' }
   | { kind: 'changelog' }
   | { kind: 'profile' }
   | { kind: 'share'; payload: SharePayload }
   | { kind: 'reminder'; taskId: number }
+  | { kind: 'deadline'; taskId: number; presetDate?: string }
   | { kind: 'onboarding' }
-  | { kind: 'palette' };
+  | { kind: 'calendar' }
+  | { kind: 'calendars' }
+  | { kind: 'icsImport'; fileName: string; text: string }
+  | { kind: 'sheetImport'; file: File }
+  | { kind: 'mini' };
 
 export type LayerEntry = Layer & { id: number };
 

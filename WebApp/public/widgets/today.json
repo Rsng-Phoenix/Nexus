@@ -1,0 +1,46 @@
+{
+  "type": "AdaptiveCard",
+  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+  "version": "1.5",
+  "body": [
+    {
+      "type": "ColumnSet",
+      "columns": [
+        { "type": "Column", "width": "stretch", "items": [
+          { "type": "TextBlock", "text": "${title}", "weight": "Bolder", "size": "Medium" },
+          { "type": "TextBlock", "text": "${subtitle}", "isSubtle": true, "spacing": "None", "size": "Small" }
+        ] },
+        { "type": "Column", "width": "auto", "verticalContentAlignment": "Center", "items": [
+          { "type": "TextBlock", "text": "${countLabel}", "weight": "Bolder", "color": "Accent" }
+        ] }
+      ]
+    },
+    {
+      "type": "Container",
+      "spacing": "Medium",
+      "$data": "${items}",
+      "items": [
+        {
+          "type": "ColumnSet",
+          "spacing": "Small",
+          "selectAction": { "type": "Action.Execute", "verb": "open", "data": { "uuid": "${uuid}" } },
+          "columns": [
+            { "type": "Column", "width": "auto", "items": [ { "type": "TextBlock", "text": "●", "color": "${color}" } ] },
+            { "type": "Column", "width": "stretch", "items": [
+              { "type": "TextBlock", "text": "${text}", "wrap": false, "maxLines": 1 },
+              { "type": "TextBlock", "text": "${meta}", "isSubtle": true, "size": "Small", "spacing": "None", "color": "${metaColor}" }
+            ] },
+            { "type": "Column", "width": "auto", "verticalContentAlignment": "Center", "items": [
+              { "type": "ActionSet", "actions": [ { "type": "Action.Execute", "title": "Done", "verb": "done", "data": { "uuid": "${uuid}" } } ] }
+            ] }
+          ]
+        }
+      ]
+    },
+    { "type": "TextBlock", "text": "${empty}", "isSubtle": true, "wrap": true, "$when": "${count == 0}", "spacing": "Medium" }
+  ],
+  "actions": [
+    { "type": "Action.Execute", "title": "New task", "verb": "add" },
+    { "type": "Action.Execute", "title": "Open Nexus", "verb": "open" }
+  ]
+}

@@ -11,13 +11,24 @@ import { FullScreenQuadrant } from './FullScreen';
 import { Matrix } from './Matrix';
 import { Onboarding } from './Onboarding';
 import { ProfileSheet } from './ProfileSheet';
+import { PriorityPicker } from './QuickAdd';
+import { PromptHost } from './PromptHost';
+import { activePrompt } from '../state/prompts';
+import { closeMiniWindow, miniOpen, miniSupported, openMiniWindow } from './MiniWindow';
 import { ReminderWizard } from './ReminderWizard';
+import { DeadlineSheet } from './DeadlineSheet';
+import { CalendarPage } from './CalendarPage';
+import { LinkedCalendarsSheet } from './LinkedCalendarsSheet';
+import { IcsImportSheet } from './IcsImportSheet';
+import { SheetImportPage } from './SheetImportPage';
 import { SettingsPage } from './SettingsPage';
 import { ShareSheet } from './ShareSheet';
 import { Fab, Toasts, TopBar, usePullToSync } from './Shell';
 import { TaskDetailSheet } from './TaskDetailSheet';
 import { TourOverlay, startTour } from './Tour';
 import { VaultPage } from './VaultPage';
+import { isPc } from '../state/viewport';
+import { tour } from './tour-state';
 
 /** Props every layer component receives. */
 export type LayerProps = {
@@ -44,26 +55,34 @@ export function App() {
     else if (!s.tutorialDone) startTour();
     if (s.googleEmail) void runSync({ background: true });
     // Pull remote changes into the UI when a sync finishes.
+    let reconnectShown = false;
     const off = onSyncState((busy, result) => {
       if (busy || !result) return;
       void reload();
       if (result.needsReconnect && !result.ok) {
+        // Once per session: background syncs must not nag every few minutes.
+        if (reconnectShown) return;
+        reconnectShown = true;
         showSnack('Google Drive needs you to sign in again', { label: 'Reconnect', run: () => void runSync() }, 6000);
       } else if (result.ok && result.message !== 'Synced') {
         showSyncPill(result.message.replace('Synced · ', '↓ '));
       }
     });
     const every15 = window.setInterval(() => void runSync({ background: true }), 15 * 60_000);
-    // Desktop shortcuts: N new task, 1–4 open a quadrant, S sync, comma settings.
+    // Keyboard (any device with one): Enter or N new task, 1–4 open a quadrant, S sync, comma settings.
     const keys = (e: KeyboardEvent) => {
       const t = e.target;
-      if (e.metaKey || e.ctrlKey || e.altKey || nav.top.value) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || nav.top.value || activePrompt.value) return;
       if (t instanceof Element && t.closest('input, textarea, [contenteditable="true"]')) return;
       const quad = ({ '1': 'HIGH', '2': 'MEDIUM', '3': 'LOW', '4': 'NONE' } as const)[e.key as '1'];
-      if (e.key === 'n' || e.key === 'N') {
+      const onControl = t instanceof Element && t.closest('button, a, [role="button"], select');
+      if ((e.key === 'Enter' && !onControl && !e.repeat) || e.key === 'n' || e.key === 'N') {
+        if (!tour.allows('ADD')) return;
         e.preventDefault();
-        nav.open({ kind: 'add', priority: 'HIGH' });
+        nav.open({ kind: 'pick' });
       } else if (quad) nav.open({ kind: 'full', priority: quad });
+      else if (e.key === 'c' || e.key === 'C') nav.open({ kind: 'calendar' });
+      else if ((e.key === 'm' || e.key === 'M') && miniSupported()) void (miniOpen.value ? closeMiniWindow() : openMiniWindow());
       else if (e.key === 's' && getSettings().googleEmail) void runSync();
       else if (e.key === ',') nav.open({ kind: 'settings' });
     };
@@ -80,10 +99,11 @@ export function App() {
     <div class="nx-app" ref={shell}>
       <TopBar onBrand={() => nav.open({ kind: 'about' })} />
       <Matrix />
-      <Fab onAdd={(p) => nav.open({ kind: 'add', priority: p })} />
+      {!isPc.value && <Fab onAdd={(p) => nav.open({ kind: 'add', priority: p })} />}
       <LayerHost />
       <Toasts />
       <TourOverlay />
+      <PromptHost />
     </div>
   );
 }
@@ -115,13 +135,15 @@ function LayerView({ entry, leaving }: { entry: LayerEntry; leaving: boolean }) 
   };
   switch (entry.kind) {
     case 'add':
-      return <AddTaskSheet {...p} priority={entry.priority} locked={entry.locked} />;
+      return <AddTaskSheet {...p} priority={entry.priority} locked={entry.locked} text={entry.text} due={entry.due} notes={entry.notes} />;
+    case 'pick':
+      return <PriorityPicker {...p} />;
     case 'detail':
       return <TaskDetailSheet {...p} taskId={entry.taskId} />;
     case 'full':
       return <FullScreenQuadrant {...p} priority={entry.priority} />;
     case 'settings':
-      return <SettingsPage {...p} />;
+      return <SettingsPage {...p} cat={entry.cat} />;
     case 'vault':
       return <VaultPage {...p} which={entry.which} />;
     case 'about':
@@ -134,8 +156,18 @@ function LayerView({ entry, leaving }: { entry: LayerEntry; leaving: boolean }) 
       return <ShareSheet {...p} payload={entry.payload} />;
     case 'reminder':
       return <ReminderWizard {...p} taskId={entry.taskId} />;
+    case 'deadline':
+      return <DeadlineSheet {...p} taskId={entry.taskId} presetDate={entry.presetDate} />;
     case 'onboarding':
       return <Onboarding {...p} />;
+    case 'calendar':
+      return <CalendarPage {...p} />;
+    case 'calendars':
+      return <LinkedCalendarsSheet {...p} />;
+    case 'icsImport':
+      return <IcsImportSheet {...p} fileName={entry.fileName} text={entry.text} />;
+    case 'sheetImport':
+      return <SheetImportPage {...p} file={entry.file} />;
     default:
       return null;
   }
