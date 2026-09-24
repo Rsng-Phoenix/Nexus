@@ -38,6 +38,16 @@ const SIZES = [
   ['Large (two-column matrix)', 560, 720]
 ];
 const OPACITY = [1, 0.92, 0.85, 0.75];
+// Browsers "Open full Nexus" can use, when installed (bundle id, name).
+const BROWSERS = [
+  ['com.brave.Browser', 'Brave'],
+  ['com.google.Chrome', 'Chrome'],
+  ['company.thebrowser.Browser', 'Arc'],
+  ['com.microsoft.edgemac', 'Edge'],
+  ['com.vivaldi.Vivaldi', 'Vivaldi'],
+  ['org.mozilla.firefox', 'Firefox'],
+  ['com.apple.Safari', 'Safari']
+];
 const HOT_CORNER_DWELL_MS = 250;
 const TICK_S = 0.12;
 
@@ -189,6 +199,69 @@ function setLogin(on) {
 
 // ─── Menu ──────────────────────────────────────────────────────────────────
 
+// ─── Where "Open full Nexus" goes ───────────────────────────────────────────
+// Targets: the Nexus app installed from Brave / Chrome / Edge ("Install Nexus"), a browser, or
+// the Mac's default browser. The default is the installed Nexus app when there is one.
+
+/** Nexus installed as an app from a Chromium browser (~/Applications/<Browser> Apps/Nexus.app). */
+function nexusWebApps() {
+  const fm = $.NSFileManager.defaultManager;
+  const root = $.NSHomeDirectory().js + '/Applications';
+  const out = [];
+  const dirs = fm.contentsOfDirectoryAtPathError(root, null);
+  if (dirs.isNil()) return out;
+  dirs.js.map((d) => d.js).filter((d) => / Apps(\.localized)?$/.test(d)).forEach((d) => {
+    const apps = fm.contentsOfDirectoryAtPathError(root + '/' + d, null);
+    if (apps.isNil()) return;
+    apps.js.map((a) => a.js).filter((a) => a.endsWith('.app')).forEach((a) => {
+      const path = root + '/' + d + '/' + a;
+      const info = $.NSDictionary.dictionaryWithContentsOfFile(path + '/Contents/Info.plist');
+      if (info.isNil()) return;
+      const start = info.objectForKey('CrAppModeShortcutURL');
+      const id = info.objectForKey('CFBundleIdentifier');
+      if (start.isNil() || id.isNil() || start.js.indexOf(NEXUS_URL) !== 0) return;
+      const parent = id.js.replace(/\.app\..*$/, '');
+      const b = BROWSERS.find((x) => x[0] === parent);
+      out.push({ key: 'app:' + path, label: 'Nexus app (' + (b ? b[1] : d.replace(/ Apps(\.localized)?$/, '')) + ')', path: path, parent: parent });
+    });
+  });
+  return out;
+}
+
+function openTargets() {
+  const ws = $.NSWorkspace.sharedWorkspace;
+  const browsers = BROWSERS.filter((b) => !ws.URLForApplicationWithBundleIdentifier(b[0]).isNil()).map((b) => ({ key: 'b:' + b[0], label: b[1], id: b[0] }));
+  return nexusWebApps().concat(browsers, [{ key: 'default', label: 'Default browser' }]);
+}
+
+function openTarget() {
+  const all = openTargets();
+  const want = pref('openIn', 'auto');
+  return all.find((t) => t.key === want) || all.find((t) => t.key.indexOf('app:') === 0) || all[all.length - 1];
+}
+
+function runOpen(args) {
+  $.NSTask.launchedTaskWithLaunchPathArguments('/usr/bin/open', $(args));
+}
+
+/** The full app: the installed Nexus app is launched as is; a browser gets the address. */
+function openFull() {
+  const t = openTarget();
+  if (t.path) runOpen([t.path]);
+  else if (t.id) runOpen(['-b', t.id, NEXUS_URL]);
+  else $.NSWorkspace.sharedWorkspace.openURL($.NSURL.URLWithString(NEXUS_URL));
+}
+
+/** Any other link from the window (a task, a meeting): the chosen browser (an app's own browser). */
+function openLink(url) {
+  const t = openTarget();
+  const id = t.id || t.parent;
+  if (id) runOpen(['-b', id, url.absoluteString.js]);
+  else $.NSWorkspace.sharedWorkspace.openURL(url);
+}
+
+let targetList = [];
+
 function item(title, action, key, tag) {
   const it = $.NSMenuItem.alloc.initWithTitleActionKeyEquivalent(title, action, key || '');
   it.target = controller;
@@ -202,7 +275,18 @@ function buildMenu() {
 
   const toggleItem = item(isShown() ? 'Hide Nexus' : 'Show Nexus', 'toggle:', 'n');
   m.addItem(toggleItem);
-  m.addItem(item('Open full Nexus in browser', 'openFull:', 'o'));
+  targetList = openTargets();
+  const current = openTarget();
+  m.addItem(item('Open full Nexus', 'openFull:', 'o'));
+  const openRoot = item('Open Nexus in: ' + current.label, null);
+  const openMenu = $.NSMenu.alloc.init;
+  targetList.forEach((t, i) => {
+    const it = item(t.label, 'setOpenIn:', '', i);
+    it.state = t.key === current.key ? 1 : 0;
+    openMenu.addItem(it);
+  });
+  openRoot.submenu = openMenu;
+  m.addItem(openRoot);
   m.addItem(item('Reload', 'reload:', 'r'));
   m.addItem($.NSMenuItem.separatorItem);
 
@@ -286,9 +370,13 @@ ObjC.registerSubclass({
       }
     },
     'toggle:': { types: ['void', ['id']], implementation: () => toggle() },
-    'openFull:': {
+    'openFull:': { types: ['void', ['id']], implementation: () => openFull() },
+    'setOpenIn:': {
       types: ['void', ['id']],
-      implementation: () => $.NSWorkspace.sharedWorkspace.openURL($.NSURL.URLWithString(NEXUS_URL))
+      implementation: (sender) => {
+        const t = targetList[sender.tag];
+        if (t) setPref('openIn', t.key);
+      }
     },
     'reload:': { types: ['void', ['id']], implementation: () => web.reload },
     'setMode:': {
@@ -351,7 +439,7 @@ ObjC.registerSubclass({
         const href = url.isNil() ? '' : url.absoluteString.js;
         const host = url.isNil() || url.host.isNil() ? '' : url.host.js;
         if (href && !/(^|\.)google\.com$/.test(host)) {
-          $.NSWorkspace.sharedWorkspace.openURL(url);
+          openLink(url);
           return $();
         }
         const win = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0, 0, 480, 640), 1 | 2 | 8, 2, false);

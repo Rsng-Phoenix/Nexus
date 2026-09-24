@@ -75,9 +75,10 @@ if (typeof document !== 'undefined') {
   window.addEventListener('online', () => scheduleSync(300));
 }
 
-export async function signInMessage(): Promise<string> {
+/** [hint]: the Google account to preselect (e.g. the one "Scan to set up" brought over). */
+export async function signInMessage(hint?: string): Promise<string> {
   // With long sessions this leaves the page for Google and finishes in finishRedirectSignIn().
-  const result = await signInWithDriveScope();
+  const result = await signInWithDriveScope(hint);
   if (!result.ok) {
     patchSettings({ lastSyncError: result.message });
     return result.message;

@@ -4,8 +4,9 @@ import { getSettings, subscribeSettings } from '../settings/store';
 import { activeTasks, onTasksWritten } from '../state/store';
 import type { Task } from '../types';
 import { upcomingDueFires } from '../calendar/deadline';
-import { linkedState, onLinkedUpdated } from '../calendar/linked';
+import { calendarSourceLabel, linkedState, onLinkedUpdated } from '../calendar/linked';
 import { upcomingMeetings } from '../calendar/meetings';
+import { upcomingClashes } from '../calendar/clashes';
 import { deliverRing, pendingSnoozes, type MeetInfo, type NotifySettings } from './notify';
 import { upcomingFires } from './schedule';
 
@@ -138,17 +139,23 @@ async function publish(): Promise<void> {
     if (!paused) rings.push({ ref: z.ref, fireAt: z.fireAt, kind: z.kind === 'due' ? 'due-s' : 'task-s' });
   }
   // Meeting heads-ups: only titles stay on the device (meet_index); the relay sees an opaque id.
-  const meetings = s.notifyMeetings
-    ? upcomingMeetings(
-        s.linkedCalendars.map((c) => ({ calendar: c, events: linkedState.value[c.id]?.events ?? [] })),
-        s.meetingLeadMinutes,
-        now,
-        Math.max(now, s.pauseNotificationsUntil)
-      )
-    : [];
+  const linkedNow = s.linkedCalendars.map((c) => ({ calendar: c, events: linkedState.value[c.id]?.events ?? [] }));
+  const meetings = s.notifyMeetings ? upcomingMeetings(linkedNow, s.meetingLeadMinutes, now, Math.max(now, s.pauseNotificationsUntil)) : [];
+  // Clash radar: a heads-up for a meeting that overlaps another says so.
+  const clashNote = new Map<string, string>();
+  if (s.clashRadar && meetings.length) {
+    const hhmm = (ms: number) => new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    for (const c of upcomingClashes(linkedNow, s.clashMinMinutes, s.ignoredClashes, now, 3)) {
+      for (const [me, other] of [[c.a, c.b], [c.b, c.a]] as const) {
+        const k = `${me.event.uid}|${me.start}`;
+        if (!clashNote.has(k)) clashNote.set(k, `Clashes with ${other.title} (${calendarSourceLabel(other.calendar)}) at ${hhmm(other.start)}`);
+      }
+    }
+  }
   const index: Record<string, MeetInfo> = {};
   for (const m of meetings) {
-    index[m.ref] = m.info;
+    const clash = clashNote.get(m.key);
+    index[m.ref] = clash ? { ...m.info, clash } : m.info;
     rings.push({ ref: m.ref, fireAt: m.fireAt, kind: 'meet' });
   }
   await db.setMeta('meet_index', JSON.stringify(index));

@@ -14,6 +14,9 @@ import { isWide } from '../state/viewport';
 import { PRIORITY_META } from '../types';
 import type { LayerProps } from './App';
 import { downloadIcs } from './addToCalendar';
+import { CLASH_HORIZON_DAYS, clashesByDay, type Clash } from '../calendar/clashes';
+import { clashes } from '../calendar/radar';
+import { calendarFocusDay, RadarDish } from './ClashSheet';
 import { Icon } from './icons';
 import { Checkbox, IconButton, Menu, Page, PageHeader } from './kit';
 import { animate } from './motion';
@@ -35,6 +38,13 @@ export function CalendarPage(p: LayerProps) {
   const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => void refreshLinkedOnOpen(), []);
+  // "Open day" from Clash radar (or anywhere else) jumps here.
+  const focus = calendarFocusDay.value;
+  useEffect(() => {
+    if (!focus) return;
+    calendarFocusDay.value = null;
+    selectDay(focus);
+  }, [focus]);
   // Keeps "Updated 3 min ago" honest while the page stays open.
   const [, setNow] = useState(0);
   useEffect(() => {
@@ -151,6 +161,22 @@ export function CalendarPage(p: LayerProps) {
     showSnack(`Moved to ${fmtDayHead(iso)}`);
   };
 
+  // Only once a calendar has actually loaded: "all clear" must mean checked, not unknown.
+  const radarOn = s.clashRadar && s.linkedCalendars.some((c) => c.enabled && (linkedState.value[c.id]?.fetchedAt ?? 0) > 0);
+  const clashList = radarOn ? clashes.value : [];
+  const clashDays = useMemo(() => clashesByDay(clashList), [clashList]);
+  // Meeting occurrence → the meetings it clashes with, for the tags in the day list.
+  const clashWith = useMemo(() => {
+    const m = new Map<string, Clash[]>();
+    for (const c of clashList) {
+      for (const b of [c.a, c.b]) {
+        const k = `${b.event.uid}|${b.start}`;
+        m.set(k, [...(m.get(k) ?? []), c]);
+      }
+    }
+    return m;
+  }, [clashList]);
+
   const weekdays = [...WEEKDAYS.slice(s.weekStart), ...WEEKDAYS.slice(0, s.weekStart)];
   const selItems = items.get(sel) ?? [];
   const syncing = s.linkedCalendars.some((c) => linkedState.value[c.id]?.loading);
@@ -190,6 +216,7 @@ export function CalendarPage(p: LayerProps) {
           void onFile(f);
         }}
       />
+      {radarOn && <RadarBar list={clashList} />}
       <div class="nx-cal-body">
         <section class="nx-cal-month" {...swipeHandlers}>
           <div class="nx-cal-week" aria-hidden="true">
@@ -201,14 +228,15 @@ export function CalendarPage(p: LayerProps) {
               const d = isoToDate(iso);
               const other = d.getMonth() !== ym.m;
               const late = list.some((i) => i.type === 'due' && i.late);
+              const clash = clashDays.get(iso)?.length ?? 0;
               return (
                 <div
                   key={iso}
                   role="gridcell"
                   tabIndex={iso === sel ? 0 : -1}
                   aria-selected={iso === sel}
-                  aria-label={`${fmtDayHead(iso)}, ${list.length} item${list.length === 1 ? '' : 's'}`}
-                  class={`nx-cal-day ${other ? 'other' : ''} ${iso === today ? 'today' : ''} ${iso === sel ? 'sel' : ''} ${late ? 'late' : ''}`}
+                  aria-label={`${fmtDayHead(iso)}, ${list.length} item${list.length === 1 ? '' : 's'}${clash ? `, ${clash} clash${clash === 1 ? '' : 'es'}` : ''}`}
+                  class={`nx-cal-day ${other ? 'other' : ''} ${iso === today ? 'today' : ''} ${iso === sel ? 'sel' : ''} ${late ? 'late' : ''} ${clash ? 'clash' : ''}`}
                   onClick={() => selectDay(iso)}
                   onDblClick={() => addOn(iso)}
                   onDragOver={(e) => {
@@ -223,6 +251,7 @@ export function CalendarPage(p: LayerProps) {
                   }}
                 >
                   <span class="num">{d.getDate()}</span>
+                  {clash > 0 && <span class="clash-mark" title={`${clash} clash${clash === 1 ? '' : 'es'}`} />}
                   {wide ? <CellChips list={list} /> : <CellDots list={list} />}
                 </div>
               );
@@ -275,7 +304,7 @@ export function CalendarPage(p: LayerProps) {
           ) : (
             <ul class="nx-cal-list">
               {selItems.map((i) => (
-                <AgendaRow key={i.key} item={i} />
+                <AgendaRow key={i.key} item={i} clashes={i.type === 'event' && i.time != null ? clashWith.get(`${i.event.uid}|${i.time}`) : undefined} />
               ))}
             </ul>
           )}
@@ -342,19 +371,54 @@ function CellChips({ list }: { list: CalItem[] }) {
   );
 }
 
-function AgendaRow({ item: i }: { item: CalItem }) {
+/** The strip under the header: a live radar with the next clash, or a quiet "all clear". */
+function RadarBar({ list }: { list: Clash[] }) {
+  const next = list[0];
+  const other = next ? list.length - 1 : 0;
+  return (
+    <button class={`nx-radar-bar press ${next ? 'hot' : 'calm'}`} onClick={() => nav.open({ kind: 'clashes' })} aria-label={next ? `Clash radar: ${list.length} clashes. Open` : 'Clash radar: all clear. Open'}>
+      <RadarDish count={list.length} size={next ? 34 : 22} />
+      {next ? (
+        <span class="txt">
+          <b>
+            {list.length} clash{list.length === 1 ? '' : 'es'} ahead
+          </b>
+          <small>
+            {new Date(next.overlapStart).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })} {fmtTime(next.overlapStart)} · {next.a.title} × {next.b.title}
+            {other > 0 ? ` · +${other} more` : ''}
+          </small>
+        </span>
+      ) : (
+        <span class="txt">
+          <b>Clash radar · all clear</b>
+          <small>No meetings overlap in the next {CLASH_HORIZON_DAYS} days</small>
+        </span>
+      )}
+      <Icon name="chevronRight" size={18} class="go" />
+    </button>
+  );
+}
+
+function AgendaRow({ item: i, clashes: cl }: { item: CalItem; clashes?: Clash[] }) {
   if (i.type === 'event') {
     const ev = i.event;
+    const partners = (cl ?? []).map((c) => (c.a.event.uid === ev.uid && c.a.start === i.time ? c.b : c.a));
     return (
-      <li class="nx-cal-row event" style={{ '--c': i.calendar.color } as JSX.CSSProperties}>
+      <li class={`nx-cal-row event ${partners.length ? 'clash' : ''}`} style={{ '--c': i.calendar.color } as JSX.CSSProperties}>
         <span class="bar" />
-        <span class="ic"><Icon name="event" size={18} /></span>
+        <span class="ic"><Icon name={partners.length ? 'warning' : 'event'} size={18} /></span>
         <span class="txt">
           <span class="t">{ev.summary || '(No title)'}</span>
           <span class="m">
             {i.time != null ? fmtTime(i.time) : 'All day'} · <b class="src" style={{ color: i.calendar.color }}>{calendarSourceLabel(i.calendar)}</b>
-            {ev.location ? ` · ${ev.location}` : ''}
+            {ev.location && !/^https?:\/\//i.test(ev.location) ? ` · ${ev.location}` : ''}
           </span>
+          {partners.length > 0 && (
+            <button class="clash-tag press" onClick={() => nav.open({ kind: 'clashes' })}>
+              Clashes with {partners[0].title} · {fmtTime(partners[0].start)}
+              {partners.length > 1 ? ` +${partners.length - 1}` : ''}
+            </button>
+          )}
         </span>
         {ev.meetingUrl && (
           <a class="nx-cal-join press" href={ev.meetingUrl} target="_blank" rel="noopener noreferrer" title={ev.meetingUrl}>

@@ -11,6 +11,11 @@
  * secret and returns a refresh token *to the device*. Nothing is stored here; later the device
  * swaps its refresh token for a fresh 1-hour token through `/oauth/refresh`.
  *
+ * "Scan to set up" hands a new device your linked calendars and settings through `/pair/<id>`:
+ * the sending device encrypts them (AES-GCM) with a key that only travels inside the QR code /
+ * link fragment, so this worker stores an unreadable blob for at most 10 minutes and deletes it
+ * the moment the other device collects it.
+ *
  * Secrets (set with `wrangler secret put`): VAPID_PRIVATE_JWK, VAPID_PUBLIC (base64url raw P-256),
  * GOOGLE_CLIENT_SECRET (optional; without it the app falls back to hourly Google sign-in).
  */
@@ -33,6 +38,11 @@ const MAX_AHEAD_MS = 62 * 24 * 60 * 60 * 1000;
 /** A ring this late (worker or push service was down) is dropped, never delivered in a burst. */
 const MAX_LATE_MS = 12 * 60 * 60 * 1000;
 const ICS_MAX_BYTES = 5 * 1024 * 1024;
+/** Scan to set up: how long an encrypted hand-over waits, its size, and how many may wait at once. */
+const PAIR_TTL_MS = 10 * 60 * 1000;
+const PAIR_MAX_CHARS = 96 * 1024;
+const PAIR_MAX_PENDING = 5000;
+const PAIR_ID = /^[A-Za-z0-9_-]{22,64}$/;
 /** Calendar providers whose private iCal links may be fetched for a device (no open proxy). */
 const ICS_HOSTS = [/^calendar\.google\.com$/, /^([a-z0-9-]+\.)*icloud\.com$/, /^calendar\.zoho\.(com|eu|in|com\.au|jp)$/, /^outlook\.(office365|live)\.com$/, /^outlook\.office\.com$/];
 
@@ -59,6 +69,9 @@ export default {
       if (req.method === 'GET' && url.pathname === '/vapid') return json({ publicKey: env.VAPID_PUBLIC }, 200, cors);
 
       // ── Google sign-in that lasts (code → refresh token, returned to the device only) ──
+      // Scan to set up: no device registration needed (a brand-new device has none yet).
+      if (url.pathname.startsWith('/pair/')) return await pair(req, env, cors, url.pathname.slice(6), url.searchParams.has('peek'));
+
       if (url.pathname.startsWith('/oauth/')) {
         if (!allowed.includes(origin)) return json({ error: 'origin not allowed' }, 403, cors);
         if (req.method === 'GET' && url.pathname === '/oauth/config') {
@@ -222,8 +235,52 @@ export default {
   // Every minute: send everything that is due, then forget it.
   async scheduled(_evt: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(deliverDue(env));
+    ctx.waitUntil(ensurePairTable(env).then(() => env.DB.prepare('DELETE FROM pairs WHERE expires_at < ?').bind(Date.now()).run()).catch(() => {}));
   }
 };
+
+// ─── Scan to set up ────────────────────────────────────────────────────────────
+
+let pairTableReady = false;
+async function ensurePairTable(env: Env): Promise<void> {
+  if (pairTableReady) return;
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS pairs (id TEXT PRIMARY KEY, blob TEXT NOT NULL, expires_at INTEGER NOT NULL)').run();
+  pairTableReady = true;
+}
+
+/** PUT stores an encrypted hand-over once; GET returns it once and deletes it. */
+async function pair(req: Request, env: Env, cors: Record<string, string>, id: string, peek: boolean): Promise<Response> {
+  if (!PAIR_ID.test(id)) return json({ error: 'bad id' }, 400, cors);
+  await ensurePairTable(env);
+  const now = Date.now();
+  if (req.method === 'PUT') {
+    const text = await req.text();
+    if (text.length > PAIR_MAX_CHARS + 64) return json({ error: 'too large' }, 413, cors);
+    let blob = '';
+    try {
+      blob = String((JSON.parse(text) as { blob?: unknown }).blob ?? '');
+    } catch {
+      return json({ error: 'bad request' }, 400, cors);
+    }
+    if (!blob || blob.length > PAIR_MAX_CHARS || !/^[A-Za-z0-9_-]+$/.test(blob)) return json({ error: 'bad request' }, 400, cors);
+    const pending = await env.DB.prepare('SELECT COUNT(*) AS n FROM pairs WHERE expires_at >= ?').bind(now).first<{ n: number }>();
+    if ((pending?.n ?? 0) >= PAIR_MAX_PENDING) return json({ error: 'busy, try again in a minute' }, 503, cors);
+    const res = await env.DB.prepare('INSERT OR IGNORE INTO pairs (id, blob, expires_at) VALUES (?,?,?)').bind(id, blob, now + PAIR_TTL_MS).run();
+    if (!res.meta.changes) return json({ error: 'already used' }, 409, cors);
+    return json({ ok: true, expiresAt: now + PAIR_TTL_MS }, 201, cors);
+  }
+  // ?peek: is it still waiting? Lets the sending screen show "received" without reading it.
+  if (req.method === 'GET' && peek) {
+    const row = await env.DB.prepare('SELECT 1 AS w FROM pairs WHERE id=? AND expires_at >= ?').bind(id, now).first<{ w: number }>();
+    return json({ waiting: !!row }, 200, { ...cors, 'Cache-Control': 'no-store' });
+  }
+  if (req.method === 'GET') {
+    const row = await env.DB.prepare('DELETE FROM pairs WHERE id=? AND expires_at >= ? RETURNING blob').bind(id, now).first<{ blob: string }>();
+    if (!row) return json({ error: 'not found' }, 404, { ...cors, 'Cache-Control': 'no-store' });
+    return json({ blob: row.blob }, 200, { ...cors, 'Cache-Control': 'no-store' });
+  }
+  return json({ error: 'not found' }, 404, cors);
+}
 
 type DeviceRow = { id: string; endpoint: string; p256dh: string; auth: string };
 

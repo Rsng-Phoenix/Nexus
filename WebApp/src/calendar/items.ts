@@ -52,7 +52,8 @@ export function buildCalendar(tasks: Task[], linked: LinkedEvents[], fromIso: st
   const from = new Date(`${fromIso}T00:00:00`);
   for (const { calendar, events } of linked) {
     if (!calendar.enabled) continue;
-    for (const ev of events) {
+    // Moved instances of a series show as one-offs at their new time.
+    for (const ev of events.flatMap((e) => (e.moved?.length ? [e, ...e.moved] : [e]))) {
       // A one-off multi-day event that started before the grid still covers days inside it.
       if (!ev.rrule && ev.start.allDay && ev.end?.allDay && ev.start.date < fromIso) {
         const endIso = addDaysIso(ev.end.date, -1);

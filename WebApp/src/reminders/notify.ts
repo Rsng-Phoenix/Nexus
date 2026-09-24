@@ -16,7 +16,7 @@ import { PRIORITY_META } from '../types';
 
 export type RingKind = 'task' | 'due' | 'meet';
 /** What a meeting heads-up shows (kept on the device in meta `meet_index`, keyed by ring ref). */
-export type MeetInfo = { title: string; at: number; url?: string; source: string };
+export type MeetInfo = { title: string; at: number; url?: string; source: string; /** "Clashes with Standup (Google) at 3:15 PM", from Clash radar. */ clash?: string };
 
 /** "In 10 min · 11:00 PM" / "Starting now · 11:00 PM". */
 export function meetingLabel(info: MeetInfo, now: number): string {
@@ -203,7 +203,7 @@ export async function deliverRing(reg: ServiceWorkerRegistration, ring: Ring, t:
 
     if (ring.kind === 'meet') {
       await reg.showNotification(title, {
-        body: `${label}\n${meet!.source}`,
+        body: `${label}\n${meet!.source}${meet!.clash ? `\n⚠ ${meet!.clash}` : ''}`,
         tag: `meet:${ring.ref}`,
         icon,
         badge,

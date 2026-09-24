@@ -17,3 +17,9 @@ CREATE TABLE IF NOT EXISTS reminders (
   PRIMARY KEY (device_id, ref, fire_at)
 );
 CREATE INDEX IF NOT EXISTS reminders_due ON reminders (fire_at);
+-- Scan to set up: encrypted hand-overs between two of your devices (unreadable here; 10 min, one read).
+CREATE TABLE IF NOT EXISTS pairs (
+  id TEXT PRIMARY KEY,
+  blob TEXT NOT NULL,
+  expires_at INTEGER NOT NULL
+);

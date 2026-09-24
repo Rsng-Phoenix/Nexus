@@ -20,9 +20,9 @@ const NO_SCOPE_MSG =
 /**
  * Sign in with Google and ensure Drive app-data scope (retry consent once if missing).
  */
-export async function signInWithDriveScope(): Promise<SignInResult> {
+export async function signInWithDriveScope(hint?: string): Promise<SignInResult> {
   // Stay-signed-in flow: full-page redirect to Google (works in installed apps and on iPhone).
-  if (await longSessionsAvailable()) await startRedirectSignIn(GOOGLE_CLIENT_ID, SCOPE);
+  if (await longSessionsAvailable()) await startRedirectSignIn(GOOGLE_CLIENT_ID, SCOPE, hint);
   for (let attempt = 0; attempt < 2; attempt++) {
     clearToken();
     const token = await getAccessToken(true);

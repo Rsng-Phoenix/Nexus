@@ -89,7 +89,30 @@ export type IcsEvent = {
   recurrenceId?: string;
   /** Video-call link (Google Meet, Zoom, Teams…) found in the event, for a Join button. */
   meetingUrl?: string;
+  /** Length from DURATION when there is no DTEND (ms). */
+  durationMs?: number;
+  /** TRANSP:TRANSPARENT: shown as "free", so it never blocks time or clashes. */
+  free?: boolean;
+  /** Attendee e-mails (lower case) that declined. */
+  declined?: string[];
+  /** Series only: instances that don't happen as the rule says (EXDATE, cancelled or moved). Keys from instanceKey(). */
+  skip?: string[];
+  /** Series only: moved or edited single instances, each a one-off event. */
+  moved?: IcsEvent[];
+  /** Parser-internal: RECURRENCE-ID parameters (TZID…), dropped before events are returned. */
+  recurrenceIdParams?: Record<string, string>;
 };
+
+/** Identity of one instance: "t:<epoch ms>" for timed, "d:<yyyy-mm-dd>" for all-day. */
+export const instanceKey = (dt: IcsDateTime) => (dt.allDay || dt.time === undefined ? `d:${dt.date}` : `t:${dt.time}`);
+
+/** How long one instance lasts (ms); 0 when the event gives no end. */
+export function eventLengthMs(ev: IcsEvent): number {
+  if (ev.end && !ev.end.allDay && !ev.start.allDay && ev.end.time !== undefined && ev.start.time !== undefined) {
+    return Math.max(0, ev.end.time - ev.start.time);
+  }
+  return ev.durationMs ?? 0;
+}
 
 const MEETING_HOSTS = [
   'meet.google.com',
@@ -560,8 +583,28 @@ export function parseIcs(text: string): IcsEvent[] {
     if (props && stack[stack.length - 1] === 'VEVENT') props.push(cl);
   }
 
-  const masters = new Set(events.filter((e) => e.rrule && !e.recurrenceId).map((e) => e.uid));
-  return events.filter((e) => !(e.recurrenceId && masters.has(e.uid)));
+  // A RECURRENCE-ID event replaces (or, when cancelled, removes) one instance of its series:
+  // the series skips that instance and, unless cancelled, shows the moved copy instead.
+  const masters = new Map<string, IcsEvent>();
+  for (const e of events) if (e.rrule && !e.recurrenceId && !masters.has(e.uid)) masters.set(e.uid, e);
+  const out: IcsEvent[] = [];
+  for (const e of events) {
+    const master = e.recurrenceId ? masters.get(e.uid) : undefined;
+    if (master) {
+      const at = parseIcsDateTime(e.recurrenceId as string, e.recurrenceIdParams ?? {});
+      if (at) (master.skip ??= []).push(instanceKey(at));
+      if (e.status !== 'CANCELLED') (master.moved ??= []).push(stripOverride(e));
+      continue;
+    }
+    if (e.status === 'CANCELLED') continue;
+    out.push(e.recurrenceIdParams ? stripOverride(e) : e);
+  }
+  return out;
+}
+
+function stripOverride(e: IcsEvent): IcsEvent {
+  const { recurrenceIdParams: _p, ...rest } = e;
+  return rest;
 }
 
 function eventFromProps(props: ContentLine[]): IcsEvent | null {
@@ -571,7 +614,6 @@ function eventFromProps(props: ContentLine[]): IcsEvent | null {
   const start = parseIcsDateTime(dtstart.value, dtstart.params);
   if (!start) return null;
   const status = get('STATUS')?.value.trim().toUpperCase();
-  if (status === 'CANCELLED') return null;
   const summary = unescapeText(get('SUMMARY')?.value ?? '').trim();
   // UID is mandatory in RFC 5545; a few exporters omit it, then the summary stands in.
   const uid = (get('UID')?.value ?? '').trim() || summary;
@@ -598,8 +640,37 @@ function eventFromProps(props: ContentLine[]): IcsEvent | null {
   if (rrule) ev.rrule = rrule;
   if (status) ev.status = status;
   const recurrenceId = get('RECURRENCE-ID')?.value.trim();
-  if (recurrenceId) ev.recurrenceId = recurrenceId;
+  if (recurrenceId) {
+    ev.recurrenceId = recurrenceId;
+    ev.recurrenceIdParams = get('RECURRENCE-ID')?.params ?? {};
+  }
+  const dur = get('DURATION');
+  const durationMs = dur ? parseDuration(dur.value) : 0;
+  if (!end && durationMs > 0) ev.durationMs = durationMs;
+  if (get('TRANSP')?.value.trim().toUpperCase() === 'TRANSPARENT') ev.free = true;
+  const declined = props
+    .filter((p) => p.name === 'ATTENDEE' && (p.params.PARTSTAT ?? '').toUpperCase() === 'DECLINED')
+    .map((p) => p.value.trim().replace(/^mailto:/i, '').toLowerCase())
+    .filter(Boolean);
+  if (declined.length) ev.declined = declined;
+  const skip: string[] = [];
+  for (const p of props) {
+    if (p.name !== 'EXDATE') continue;
+    for (const v of p.value.split(',')) {
+      const dt = parseIcsDateTime(v, p.params);
+      if (dt) skip.push(instanceKey(dt));
+    }
+  }
+  if (skip.length) ev.skip = skip;
   return ev;
+}
+
+/** RFC 5545 DURATION ("PT1H30M", "P1D", "-PT15M" → 0) in ms. */
+export function parseDuration(value: string): number {
+  const m = /^([+-])?P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/i.exec(value.trim());
+  if (!m || m[1] === '-') return 0;
+  const [, , w, d, h, mi, sec] = m.map((x) => Number(x ?? 0));
+  return ((((w * 7 + d) * 24 + h) * 60 + mi) * 60 + sec) * 1000;
 }
 
 /**
@@ -709,7 +780,8 @@ function beyondUntil(occ: IcsDateTime, wallDate: string, lim: { date?: string; t
  * The first occurrence starting at or after `from` (all-day events: on or after `from`'s local
  * day), or null when the event / series is over. DTSTART always counts as the first instance.
  * Supports FREQ DAILY/WEEKLY/MONTHLY/YEARLY with INTERVAL, COUNT, UNTIL, BYDAY (weekly days;
- * monthly "2TU"/"-1FR"). EXDATE, BYMONTHDAY, BYSETPOS and other BY* parts are not applied.
+ * monthly "2TU"/"-1FR"), skipping EXDATE and moved / cancelled instances (ev.skip). BYMONTHDAY,
+ * BYSETPOS and other BY* parts are not applied.
  */
 export function nextOccurrence(ev: IcsEvent, from: Date): IcsDateTime | null {
   const fromMs = from.getTime();
@@ -730,6 +802,7 @@ export function nextOccurrence(ev: IcsEvent, from: Date): IcsDateTime | null {
   const startDay = dayNumOf(p.wall.y, p.wall.m, p.wall.d);
   const lim = untilLimit(rule.until);
 
+  const skipped = ev.skip?.length ? new Set(ev.skip) : null;
   let count = 0;
   let steps = 0;
   let last = -Infinity;
@@ -739,6 +812,7 @@ export function nextOccurrence(ev: IcsEvent, from: Date): IcsDateTime | null {
     const wall = wallFromDayNum(dayNum, p.wall);
     const occ = dayNum === startDay ? ev.start : makeDateTime(wall, kind);
     if (beyondUntil(occ, isoOfUtcDay(dayNum), lim)) return null;
+    if (skipped && (skipped.has(instanceKey(occ)) || skipped.has(`d:${occ.date}`))) return undefined;
     return notBefore(occ) ? occ : undefined;
   };
 

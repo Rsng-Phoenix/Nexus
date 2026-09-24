@@ -9,7 +9,8 @@ export { meetingLabel, type MeetInfo } from '../reminders/notify';
  * Heads-up notifications before meetings from linked calendars (opt-in, Settings →
  * Notifications). Only timed events; all-day events never ring.
  */
-export type Meeting = { ref: string; fireAt: number; info: MeetInfo };
+/** [key] is "<uid>|<start ms>", the same occurrence id Clash radar uses. */
+export type Meeting = { ref: string; key: string; fireAt: number; info: MeetInfo };
 
 /** Meetings are scheduled this far ahead; calendars refresh far more often than that. */
 export const MEETING_HORIZON_MS = 48 * 3_600_000;
@@ -46,6 +47,7 @@ export function upcomingMeetings(linked: LinkedEvents[], leadMin: number, now: n
       seen.add(ref);
       out.push({
         ref,
+        key: `${i.event.uid}|${i.time}`,
         fireAt,
         info: { title: i.event.summary || 'Meeting', at: i.time, source: calendarSourceLabel(i.calendar), ...(i.event.meetingUrl ? { url: i.event.meetingUrl } : {}) }
       });
