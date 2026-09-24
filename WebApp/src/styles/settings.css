@@ -1,0 +1,48 @@
+/* ─── Settings + Vault (NexusHubSheet.kt / TaskVaultSheet.kt) ─────────────── */
+
+/* Settings */
+.nx-settings .nx-page-header { padding: 4px 4px; }
+.nx-settings-pad { padding: 14px; }
+.nx-settings-seg { padding: 0 16px 12px 60px; }
+.nx-settings-gap { height: 6px; }
+.nx-settings .nx-slider-row .nx-slider { flex: 1; }
+.nx-settings .nx-slider-row .nx-slider-end { flex: none; font-size: 11px; color: var(--nx-textSec); }
+.nx-settings .nx-slider-row.split .nx-slider { margin: 0 8px; }
+.nx-settings .nx-inline { padding: 2px 16px 8px 60px; }
+.nx-settings-footer { text-align: center; font-size: 11px; color: var(--nx-textTer); padding: 32px 0 24px; }
+
+/* Compose AnimatedVisibility(expandVertically + fadeIn). */
+.nx-collapse { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 280ms var(--ease-enter), opacity 200ms var(--ease-std); }
+.nx-collapse.open { grid-template-rows: 1fr; opacity: 1; }
+.nx-collapse > div { min-height: 0; overflow: hidden; }
+
+.nx-switch.nx-switch-disabled { opacity: 0.38; cursor: default; }
+.nx-row-static { cursor: default; }
+
+/* Restore dialog: stacked actions, end-aligned (Android Column(Alignment.End)) */
+.nx-restore-body { display: flex; flex-direction: column; gap: 8px; }
+.nx-restore-body .strong { color: var(--nx-textPri); font-weight: 600; }
+.nx-restore-body .small { font-size: 12px; }
+.nx-restore-actions { width: 100%; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+
+/* Vault */
+.nx-vault .nx-page-header { padding: 6px 4px; }
+.nx-vault .nx-page-title h1 { font-size: 18px; font-weight: 700; }
+.nx-vault .nx-page-title p { font-size: 11px; line-height: 1.35; }
+.nx-vault .nx-page-header .nx-text-btn { font-size: 13px; font-weight: 600; flex: none; }
+.nx-vault-divider { height: 1px; background: var(--nx-stroke); flex: none; }
+.nx-vault-list { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 10px 16px calc(10px + var(--safe-bottom)); display: flex; flex-direction: column; gap: 8px; overscroll-behavior: contain; }
+.nx-vault-list > * { width: 100%; max-width: 680px; margin-left: auto; margin-right: auto; }
+.nx-vault-row { display: flex; align-items: center; padding-right: 4px; border-radius: 14px; background: var(--nx-surface); border: 0.5px solid var(--nx-stroke); overflow: hidden; flex: none; will-change: transform; }
+.nx-vault-row[data-leaving] { pointer-events: none; }
+.nx-vault-row .bar { width: 4px; height: 56px; flex: none; align-self: stretch; min-height: 56px; }
+.nx-vault-row .body { flex: 1; min-width: 0; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; }
+.nx-vault-row .title { font-size: calc(14px * var(--nx-font-scale)); line-height: 1.35; color: var(--nx-textPri); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+.nx-vault-row .meta { font-size: 11px; color: var(--nx-textSec); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nx-vault-row .nx-icon-btn { width: 40px; height: 40px; }
+
+.nx-vault-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; text-align: center; animation: nx-vault-fade 260ms var(--ease-enter) both; }
+.nx-vault-empty .circle { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; background: color-mix(in srgb, var(--nx-accent) 10%, transparent); color: var(--nx-accent); }
+.nx-vault-empty .head { margin-top: 14px; font-size: 15px; font-weight: 600; color: var(--nx-textPri); }
+.nx-vault-empty .cap { margin-top: 4px; font-size: 12px; color: var(--nx-textSec); }
+@keyframes nx-vault-fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }

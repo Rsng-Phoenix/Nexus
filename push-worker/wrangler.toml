@@ -1,0 +1,19 @@
+# Nexus reminder relay. Free Cloudflare Workers plan is plenty (1 cron/minute + a few requests per edit).
+name = "nexus-push"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+workers_dev = true
+preview_urls = false
+
+# Web app origins allowed to call the worker (comma separated).
+[vars]
+ALLOWED_ORIGINS = "https://rsng-phoenix.github.io,http://localhost:5173,http://localhost:4173"
+VAPID_SUBJECT = "mailto:priyanshupradhan0204@gmail.com"
+
+[triggers]
+crons = ["* * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "nexus-push"
+database_id = "8b2d600c-7125-4aca-9ceb-2ceb69c07741"

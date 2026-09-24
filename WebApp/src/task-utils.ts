@@ -13,18 +13,21 @@ function clearReminder(t: Task, history: string): Task {
   };
 }
 
+/** Android TaskDisplayOrder (a done pinned task no longer sticks to the top). */
 export function sortTasks(list: Task[]): Task[] {
+  const done = (t: Task) => t.isCompleted || t.isWontDo;
+  const pinnedOpen = (t: Task) => t.isPinned && !done(t);
   return [...list].sort(
     (a, b) =>
-      Number(b.isPinned) - Number(a.isPinned) ||
-      Number(a.isCompleted) - Number(b.isCompleted) ||
+      Number(done(a)) - Number(done(b)) ||
+      Number(pinnedOpen(b)) - Number(pinnedOpen(a)) ||
       Number(a.isWontDo) - Number(b.isWontDo) ||
       a.position - b.position
   );
 }
 
 export function tasksForPriority(tasks: Task[], p: Priority): Task[] {
-  return sortTasks(tasks.filter((t) => t.priority === p && t.deletedAt === 0));
+  return sortTasks(tasks.filter((t) => t.priority === p && t.deletedAt === 0 && !(t.archivedAt > 0)));
 }
 
 export function newTask(description: string, priority: Priority): Omit<Task, 'id'> {
@@ -47,7 +50,8 @@ export function newTask(description: string, priority: Priority): Omit<Task, 'id
     updatedAt: now,
     deletedAt: 0,
     completedAt: 0,
-    skippedAt: 0
+    skippedAt: 0,
+    archivedAt: 0
   };
 }
 

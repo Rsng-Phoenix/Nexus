@@ -1,0 +1,142 @@
+import { useEffect, useRef } from 'preact/hooks';
+import { getSettings, settingsSig } from '../settings/store';
+import * as nav from '../state/nav';
+import type { LayerEntry } from '../state/nav';
+import { purgeExpired, reload } from '../state/store';
+import { showSnack, showSyncPill } from '../state/toasts';
+import { onSyncState, runSync } from '../sync/manager';
+import { AboutSheet, ChangelogDialog } from './AboutSheet';
+import { AddTaskSheet } from './AddTaskSheet';
+import { FullScreenQuadrant } from './FullScreen';
+import { Matrix } from './Matrix';
+import { Onboarding } from './Onboarding';
+import { ProfileSheet } from './ProfileSheet';
+import { ReminderWizard } from './ReminderWizard';
+import { SettingsPage } from './SettingsPage';
+import { ShareSheet } from './ShareSheet';
+import { Fab, Toasts, TopBar, usePullToSync } from './Shell';
+import { TaskDetailSheet } from './TaskDetailSheet';
+import { TourOverlay, startTour } from './Tour';
+import { VaultPage } from './VaultPage';
+
+/** Props every layer component receives. */
+export type LayerProps = {
+  id: number;
+  leaving: boolean;
+  onExited: () => void;
+  onDismiss: () => void;
+};
+
+export function App() {
+  const shell = useRef<HTMLDivElement>(null);
+  usePullToSync(shell, () => {
+    if (!getSettings().googleEmail) {
+      showSnack('Sign in with Google to sync', { label: 'Sign in', run: () => nav.open({ kind: 'profile' }) });
+      return;
+    }
+    void runSync();
+  });
+
+  useEffect(() => {
+    void purgeExpired();
+    const s = getSettings();
+    if (!s.profileOnboardingDone) nav.open({ kind: 'onboarding' });
+    else if (!s.tutorialDone) startTour();
+    if (s.googleEmail) void runSync({ background: true });
+    // Pull remote changes into the UI when a sync finishes.
+    const off = onSyncState((busy, result) => {
+      if (busy || !result) return;
+      void reload();
+      if (result.needsReconnect && !result.ok) {
+        showSnack('Google Drive needs you to sign in again', { label: 'Reconnect', run: () => void runSync() }, 6000);
+      } else if (result.ok && result.message !== 'Synced') {
+        showSyncPill(result.message.replace('Synced · ', '↓ '));
+      }
+    });
+    const every15 = window.setInterval(() => void runSync({ background: true }), 15 * 60_000);
+    // Desktop shortcuts: N new task, 1–4 open a quadrant, S sync, comma settings.
+    const keys = (e: KeyboardEvent) => {
+      const t = e.target;
+      if (e.metaKey || e.ctrlKey || e.altKey || nav.top.value) return;
+      if (t instanceof Element && t.closest('input, textarea, [contenteditable="true"]')) return;
+      const quad = ({ '1': 'HIGH', '2': 'MEDIUM', '3': 'LOW', '4': 'NONE' } as const)[e.key as '1'];
+      if (e.key === 'n' || e.key === 'N') {
+        e.preventDefault();
+        nav.open({ kind: 'add', priority: 'HIGH' });
+      } else if (quad) nav.open({ kind: 'full', priority: quad });
+      else if (e.key === 's' && getSettings().googleEmail) void runSync();
+      else if (e.key === ',') nav.open({ kind: 'settings' });
+    };
+    window.addEventListener('keydown', keys);
+    return () => {
+      off();
+      clearInterval(every15);
+      window.removeEventListener('keydown', keys);
+    };
+  }, []);
+
+  settingsSig.value; // theme / font scale re-render
+  return (
+    <div class="nx-app" ref={shell}>
+      <TopBar onBrand={() => nav.open({ kind: 'about' })} />
+      <Matrix />
+      <Fab onAdd={(p) => nav.open({ kind: 'add', priority: p })} />
+      <LayerHost />
+      <Toasts />
+      <TourOverlay />
+    </div>
+  );
+}
+
+function LayerHost() {
+  const live = nav.layers.value;
+  const gone = nav.leaving.value;
+  // Render in stack order; leaving layers keep their slot until the exit animation ends.
+  const all = [...live.map((l) => ({ l, leaving: false })), ...gone.map((l) => ({ l, leaving: true }))].sort(
+    (a, b) => a.l.id - b.l.id
+  );
+  return (
+    <>
+      {all.map(({ l, leaving }) => (
+        <LayerView key={l.id} entry={l} leaving={leaving} />
+      ))}
+    </>
+  );
+}
+
+function LayerView({ entry, leaving }: { entry: LayerEntry; leaving: boolean }) {
+  const p: LayerProps = {
+    id: entry.id,
+    leaving,
+    onExited: () => nav.finishLeave(entry.id),
+    onDismiss: () => {
+      if (nav.top.value?.id === entry.id) nav.back();
+    }
+  };
+  switch (entry.kind) {
+    case 'add':
+      return <AddTaskSheet {...p} priority={entry.priority} locked={entry.locked} />;
+    case 'detail':
+      return <TaskDetailSheet {...p} taskId={entry.taskId} />;
+    case 'full':
+      return <FullScreenQuadrant {...p} priority={entry.priority} />;
+    case 'settings':
+      return <SettingsPage {...p} />;
+    case 'vault':
+      return <VaultPage {...p} which={entry.which} />;
+    case 'about':
+      return <AboutSheet {...p} />;
+    case 'changelog':
+      return <ChangelogDialog {...p} />;
+    case 'profile':
+      return <ProfileSheet {...p} />;
+    case 'share':
+      return <ShareSheet {...p} payload={entry.payload} />;
+    case 'reminder':
+      return <ReminderWizard {...p} taskId={entry.taskId} />;
+    case 'onboarding':
+      return <Onboarding {...p} />;
+    default:
+      return null;
+  }
+}

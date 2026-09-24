@@ -1,52 +1,55 @@
 import { getSettings } from '../settings/store';
 
-function canVibrate(): boolean {
-  return typeof navigator !== 'undefined' && 'vibrate' in navigator;
+/**
+ * Port of Android NexusHaptics: same kinds, same millisecond patterns, scaled by strength.
+ * navigator.vibrate works on Android browsers; iOS Safari has no vibration API, so on iPhone
+ * every kind falls back to the visual press/lift feedback the components already do.
+ */
+export type HapticKind =
+  | 'FAB_TAP'
+  | 'FAB_QUADRANT'
+  | 'DRAG_PICKUP'
+  | 'DRAG_TICK'
+  | 'DRAG_DROP'
+  | 'CHECK'
+  | 'DELETE'
+  | 'SYNC_PULSE'
+  | 'SYNC_SUCCESS'
+  | 'SYNC_FAIL';
+
+const PATTERNS: Record<HapticKind, number[]> = {
+  FAB_TAP: [14],
+  FAB_QUADRANT: [9],
+  DRAG_PICKUP: [18],
+  DRAG_TICK: [7],
+  DRAG_DROP: [12, 40, 20],
+  CHECK: [11],
+  DELETE: [30, 45, 16],
+  SYNC_PULSE: [10, 65, 10, 65, 10],
+  SYNC_SUCCESS: [18, 48, 26],
+  SYNC_FAIL: [36, 55, 36]
+};
+
+export const canVibrate = typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function';
+
+export function haptic(kind: HapticKind): void {
+  if (!canVibrate) return;
+  const s = getSettings();
+  if (!s.vibrationEnabled) return;
+  const k = Math.max(0.1, Math.min(1, s.vibrationStrength));
+  // Pauses (odd indexes) keep their length; pulses scale with strength.
+  const p = PATTERNS[kind].map((ms, i) => (i % 2 ? ms : Math.max(1, Math.round(ms * (0.4 + k)))));
+  try {
+    navigator.vibrate(p);
+  } catch {
+    /* ignore */
+  }
 }
 
-function strength(): number {
-  const v = getSettings().vibrationStrength;
-  return v <= 0 ? 0 : Math.min(1, v / 100);
-}
-
-function scale(pattern: number[]): number[] {
-  const s = strength();
-  if (s <= 0) return [];
-  return pattern.map((ms) => Math.max(1, Math.round(ms * s)));
-}
-
-export function vibrateTap(): void {
-  if (!canVibrate()) return;
-  const p = scale([12]);
-  if (p.length) navigator.vibrate(p);
-}
-
-export function vibrateDragStep(): void {
-  if (!canVibrate()) return;
-  const p = scale([6]);
-  if (p.length) navigator.vibrate(p);
-}
-
-export function vibrateDelete(): void {
-  if (!canVibrate()) return;
-  const p = scale([28, 40, 28]);
-  if (p.length) navigator.vibrate(p);
-}
-
-export function vibrateSyncPulse(): void {
-  if (!canVibrate()) return;
-  const p = scale([10, 30, 10, 30]);
-  if (p.length) navigator.vibrate(p);
-}
-
-export function vibrateSyncSuccess(): void {
-  if (!canVibrate()) return;
-  const p = scale([18, 35, 18]);
-  if (p.length) navigator.vibrate(p);
-}
-
-export function vibrateSyncFail(): void {
-  if (!canVibrate()) return;
-  const p = scale([45, 70, 45, 70, 45]);
-  if (p.length) navigator.vibrate(p);
-}
+// Old names still used by the sync layer.
+export const vibrateTap = () => haptic('FAB_TAP');
+export const vibrateDragStep = () => haptic('DRAG_TICK');
+export const vibrateDelete = () => haptic('DELETE');
+export const vibrateSyncPulse = () => haptic('SYNC_PULSE');
+export const vibrateSyncSuccess = () => haptic('SYNC_SUCCESS');
+export const vibrateSyncFail = () => haptic('SYNC_FAIL');

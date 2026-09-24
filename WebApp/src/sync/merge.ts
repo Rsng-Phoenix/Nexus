@@ -1,5 +1,5 @@
 import type { Task } from '../types';
-import { effectiveTimestamp, isDeleted, pruneTombstones } from './backup';
+import { effectiveTimestamp, isDeleted, pruneTombstones, TUTORIAL_UUID_PREFIX } from './backup';
 
 export interface MergeResult {
   tasks: Task[];
@@ -15,9 +15,21 @@ function pickWinner(local: Task, remote: Task): Task {
   return remoteTs >= localTs ? remote : local;
 }
 
+/** Same uuid appearing twice (e.g. from duplicate Drive files): keep the newest. */
+function newestByUuid(tasks: Task[]): Map<string, Task> {
+  const m = new Map<string, Task>();
+  for (const t of tasks) {
+    const prev = m.get(t.taskUuid);
+    m.set(t.taskUuid, prev ? pickWinner(prev, t) : t);
+  }
+  return m;
+}
+
 export function mergeTasks(local: Task[], remote: Task[]): MergeResult {
-  const localByUuid = new Map(local.map((t) => [t.taskUuid, t]));
-  const remoteByUuid = new Map(remote.map((t) => [t.taskUuid, t]));
+  const localByUuid = newestByUuid(local);
+  const remoteByUuid = newestByUuid(
+    remote.filter((t) => !t.taskUuid.startsWith(TUTORIAL_UUID_PREFIX))
+  );
   const allUuids = new Set([...localByUuid.keys(), ...remoteByUuid.keys()]);
 
   let downloaded = 0;

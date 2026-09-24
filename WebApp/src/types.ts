@@ -22,6 +22,8 @@ export interface Task {
   deletedAt: number;
   completedAt: number;
   skippedAt: number;
+  /** Archived on Android: hidden from the matrix, kept and synced. 0 = not archived. */
+  archivedAt: number;
 }
 
 export const PRIORITIES: Priority[] = ['HIGH', 'MEDIUM', 'LOW', 'NONE'];
