@@ -27,8 +27,28 @@ const SCOPE = `${DRIVE_APPDATA_SCOPE} openid email profile`;
 let tokenClient: {
   requestAccessToken: (o?: { prompt?: string }) => void;
 } | null = null;
+// Token survives reloads for its lifetime (~1h) so opening the app doesn't need a popup.
+// Scope is only drive.appdata (Nexus's own hidden file), never the user's Drive.
+const TOKEN_KEY = 'nexus_gtoken';
 let accessToken: string | null = null;
 let tokenExpires = 0;
+try {
+  const saved = JSON.parse(localStorage.getItem(TOKEN_KEY) ?? 'null') as { t: string; e: number } | null;
+  if (saved && saved.e > Date.now() + 60000) {
+    accessToken = saved.t;
+    tokenExpires = saved.e;
+  }
+} catch {
+  /* ignore */
+}
+function persistToken() {
+  try {
+    if (accessToken) localStorage.setItem(TOKEN_KEY, JSON.stringify({ t: accessToken, e: tokenExpires }));
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* ignore */
+  }
+}
 
 declare global {
   interface Window {
@@ -39,6 +59,7 @@ declare global {
             client_id: string;
             scope: string;
             callback: (r: { access_token?: string; expires_in?: number; error?: string }) => void;
+            error_callback?: (e: { type?: string }) => void;
           }) => { requestAccessToken: (o?: { prompt?: string }) => void };
         };
       };
@@ -94,7 +115,14 @@ function ensureTokenClient(): void {
       }
       accessToken = resp.access_token;
       tokenExpires = Date.now() + (resp.expires_in ?? 3600) * 1000;
+      persistToken();
       resolve(accessToken);
+    },
+    // Popup closed or blocked: without this the sign-in promise never settles.
+    error_callback: () => {
+      const resolve = pendingTokenResolve;
+      pendingTokenResolve = null;
+      resolve?.(null);
     }
   });
 }
@@ -120,9 +148,17 @@ export async function getAccessToken(
 
   return new Promise((resolve) => {
     ensureTokenClient();
+    pendingTokenResolve?.(null);
     pendingTokenResolve = resolve;
     const prompt = force ? 'consent' : '';
     tokenClient!.requestAccessToken({ prompt });
+    // Safety net: never leave a sync waiting on a popup the user walked away from.
+    setTimeout(() => {
+      if (pendingTokenResolve === resolve) {
+        pendingTokenResolve = null;
+        resolve(null);
+      }
+    }, 120000);
   });
 }
 
@@ -130,6 +166,11 @@ export function clearToken(): void {
   accessToken = null;
   tokenExpires = 0;
   pendingTokenResolve = null;
+  persistToken();
+}
+
+export function hasLiveToken(): boolean {
+  return !!accessToken && Date.now() < tokenExpires - 60000;
 }
 
 /** True if token can read the Drive app data folder (see / create / delete app backup). */
@@ -157,7 +198,8 @@ export async function hasDriveAppDataAccess(token: string): Promise<boolean> {
 }
 
 export function isDriveScopeError(message: string): boolean {
-  return /insufficient|403|access_not_configured|scope|forbidden/i.test(message);
+  // Only real permission problems; a 403 rate limit must not trigger a re-consent loop.
+  return /insufficientPermissions|ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficient authentication scopes/i.test(message);
 }
 
 export async function fetchGoogleProfile(token: string): Promise<{

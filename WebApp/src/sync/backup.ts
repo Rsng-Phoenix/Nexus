@@ -1,7 +1,13 @@
 import type { Task } from '../types';
 
 const BACKUP_VERSION = 1;
-const TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+/**
+ * How long a delete is remembered in the sync file. Fixed and identical on Android
+ * (BackupManager.SYNC_TOMBSTONE_RETENTION_MS) so devices never disagree and resurrect tasks.
+ * The user's "Recently deleted" setting only controls what the trash view shows.
+ */
+export const SYNC_TOMBSTONE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+export const TUTORIAL_UUID_PREFIX = 'nexus-tutorial-';
 export const SYNC_FILE_NAME = 'nexus_backup.json';
 
 export function isDeleted(t: Task): boolean {
@@ -18,7 +24,7 @@ export function taskKey(t: Task): string {
 }
 
 export function pruneTombstones(tasks: Task[], now = Date.now()): Task[] {
-  const cutoff = now - TOMBSTONE_RETENTION_MS;
+  const cutoff = now - SYNC_TOMBSTONE_RETENTION_MS;
   return tasks.filter((t) => !isDeleted(t) || t.deletedAt >= cutoff);
 }
 
@@ -41,7 +47,8 @@ function taskToSyncJson(t: Task): Record<string, unknown> {
     updatedAt: t.updatedAt,
     deletedAt: t.deletedAt,
     completedAt: t.completedAt,
-    skippedAt: t.skippedAt
+    skippedAt: t.skippedAt,
+    archivedAt: t.archivedAt ?? 0
   };
 }
 
@@ -85,12 +92,13 @@ export function syncJsonToTask(o: Record<string, unknown>): Task {
     updatedAt: Number(o.updatedAt ?? Date.now()),
     deletedAt: Number(o.deletedAt ?? 0),
     completedAt: Number(o.completedAt ?? 0),
-    skippedAt: Number(o.skippedAt ?? 0)
+    skippedAt: Number(o.skippedAt ?? 0),
+    archivedAt: Number(o.archivedAt ?? 0)
   };
 }
 
 export function exportSyncJson(tasks: Task[], lastSync = Date.now()): string {
-  const pruned = pruneTombstones(tasks);
+  const pruned = pruneTombstones(tasks).filter((t) => !t.taskUuid.startsWith(TUTORIAL_UUID_PREFIX));
   return JSON.stringify({
     version: BACKUP_VERSION,
     lastSync,
