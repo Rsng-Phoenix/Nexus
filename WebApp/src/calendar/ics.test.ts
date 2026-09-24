@@ -129,20 +129,26 @@ describe('exportIcs', () => {
     expect(triggers).toEqual(['-P1DT6H30M', '-PT6H30M', 'PT17H30M', 'P1DT17H30M']);
   });
 
-  it('writes a 15-minute UTC event for exact reminders only', () => {
+  it('writes a 15-minute UTC event for exact reminders, all-day events for day and range reminders', () => {
     expect(ics).toContain('UID:rem1-r@nexus\r\nDTSTAMP:20260924T080000Z\r\nDTSTART:20261006T043000Z\r\nDTEND:20261006T044500Z\r\n');
     expect(ics).not.toContain('UID:rem1@nexus');
     expect(ics).toContain('UID:both@nexus');
     expect(ics).toContain('DTEND;VALUE=DATE:20270101');
     expect(ics).toContain('UID:both-r@nexus');
-    for (const skipped of ['dateOnly', 'range', 'gone', 'nexus-tutorial-1', 'bad']) expect(ics).not.toContain(`UID:${skipped}`);
-    expect(ics.match(/BEGIN:VEVENT/g)?.length).toBe(4);
+    for (const skipped of ['gone', 'nexus-tutorial-1', 'bad']) expect(ics).not.toContain(`UID:${skipped}`);
+    const ymd = (ms: number) => localDay(ms).replace(/-/g, '');
+    const next = (ms: number) => ymd(ms + 86_400_000);
+    expect(ics).toContain(`UID:dateOnly-r@nexus\r\nDTSTAMP:20260924T080000Z\r\nDTSTART;VALUE=DATE:${ymd(utc(2026, 10, 6))}\r\nDTEND;VALUE=DATE:${next(utc(2026, 10, 6))}\r\n`);
+    expect(ics).toContain(`UID:range-r@nexus\r\nDTSTAMP:20260924T080000Z\r\nDTSTART;VALUE=DATE:${ymd(utc(2026, 10, 6))}\r\nDTEND;VALUE=DATE:${next(utc(2026, 10, 8))}\r\n`);
+    expect(ics.match(/BEGIN:VEVENT/g)?.length).toBe(6);
   });
 
   it('round-trips: parse(export) gives the same uids, dates, times and text', async () => {
     const events = parseIcs(ics);
-    expect(events.map((e) => e.uid)).toEqual(['due1@nexus', 'rem1-r@nexus', 'both@nexus', 'both-r@nexus']);
-    const [due, rem, both, bothR] = events;
+    expect(events.map((e) => e.uid)).toEqual(['due1@nexus', 'rem1-r@nexus', 'both@nexus', 'both-r@nexus', 'dateOnly-r@nexus', 'range-r@nexus']);
+    const [due, rem, both, bothR, dayRem, rangeRem] = events;
+    expect(dayRem.start.allDay).toBe(true);
+    expect(rangeRem.end?.date).toBe(localDay(utc(2026, 10, 8) + 86_400_000));
     expect(due.start).toEqual({ date: '2026-10-05', allDay: true, raw: '20261005' });
     expect(due.end?.date).toBe('2026-10-06');
     expect(due.summary).toBe('GST, Q2; filing');

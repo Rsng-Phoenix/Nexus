@@ -61,6 +61,8 @@ export interface Settings {
   clashMinMinutes: number;
   /** Clashes the user chose to ignore (ids from clashId), newest last. */
   ignoredClashes: string[];
+  /** "Show Nexus in your calendar apps": the live feed's address and write key (null = off). */
+  calendarFeed: FeedCreds | null;
   /** Which screen Nexus opens on: the matrix, or the calendar for people who plan by date. */
   startView: StartView;
   /** Settings schema version, for one-time migrations. */
@@ -68,6 +70,9 @@ export interface Settings {
 }
 
 export type StartView = 'matrix' | 'calendar';
+
+/** A live calendar feed. [shared]: this copy came from / was written to Drive (not stored there). */
+export type FeedCreds = { v: 1; id: string; key: string; createdAt: number; notes: boolean; shared?: boolean };
 
 export type LinkedCalendar = { id: string; name: string; url: string; color: string; enabled: boolean };
 
@@ -141,6 +146,7 @@ const defaults: Settings = {
   clashRadar: true,
   clashMinMinutes: 1,
   ignoredClashes: [],
+  calendarFeed: null,
   startView: 'matrix',
   schema: 4
 };
@@ -176,6 +182,7 @@ function loadRaw(): Settings {
     if (s.startView !== 'calendar') s.startView = 'matrix';
     if (!CLASH_MIN_CHOICES.includes(s.clashMinMinutes as (typeof CLASH_MIN_CHOICES)[number])) s.clashMinMinutes = 1;
     if (!Array.isArray(s.ignoredClashes)) s.ignoredClashes = [];
+    if (s.calendarFeed && !(typeof s.calendarFeed.id === 'string' && typeof s.calendarFeed.key === 'string')) s.calendarFeed = null;
     return s;
   } catch {
     return { ...defaults };

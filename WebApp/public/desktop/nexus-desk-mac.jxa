@@ -14,6 +14,12 @@ ObjC.import('WebKit');
 
 const NEXUS_URL = '__NEXUS_URL__';
 const WIDGET_URL = NEXUS_URL + '?mode=widget';
+// What the main window shows, and the optional second window (all settings, none hard-coded).
+const MAIN_VIEWS = [
+  ['tabs', 'All views (Matrix, Today, Calendar)'],
+  ['matrix', 'Matrix only'],
+  ['today', 'Today only']
+];
 const AGENT_LABEL = 'io.github.rsng-phoenix.nexus-desk';
 const AGENT_PATH = $.NSHomeDirectory().js + '/Library/LaunchAgents/' + AGENT_LABEL + '.plist';
 // Google's sign-in page only opens in real browsers, so the window identifies as Safari.
@@ -38,6 +44,7 @@ const SIZES = [
   ['Large (two-column matrix)', 560, 720]
 ];
 const OPACITY = [1, 0.92, 0.85, 0.75];
+const OPACITY_LABELS = ['Solid', 'Slightly see-through', 'See-through', 'Very see-through'];
 // Browsers "Open full Nexus" can use, when installed (bundle id, name).
 const BROWSERS = [
   ['com.brave.Browser', 'Brave'],
@@ -49,7 +56,9 @@ const BROWSERS = [
   ['com.apple.Safari', 'Safari']
 ];
 const HOT_CORNER_DWELL_MS = 250;
-const TICK_S = 0.12;
+// The hot corner is a 4-pixel tripwire window in the corner that macOS itself watches: no polling,
+// so Nexus Desk uses no CPU until the pointer actually arrives there.
+const TRIPWIRE = 4;
 
 const defaults = $.NSUserDefaults.standardUserDefaults;
 function pref(key, fallback) {
@@ -65,12 +74,21 @@ let web = null;
 let statusItem = null;
 let controller = null;
 const popups = [];
-let dwell = 0;
-let armed = true;
+let calPanel = null;
+let calWeb = null;
+let corners = [];
+let dwellTimer = null;
 
 // ─── Window ────────────────────────────────────────────────────────────────
 
 function applyMode() {
+  applyModeTo(panel);
+  if (calPanel) applyModeTo(calPanel);
+  // A normal window needs a Dock icon and a place in ⌘Tab, or it is lost once another app covers it.
+  $.NSApp.setActivationPolicy(pref('mode', 'float') === 'normal' ? 0 : 1);
+}
+
+function applyModeTo(panel) {
   const mode = pref('mode', 'float');
   if (mode === 'desktop') {
     let level = -2147483603;
@@ -83,36 +101,66 @@ function applyMode() {
   } else {
     panel.level = mode === 'float' ? 3 : 0; // NSFloatingWindowLevel : NSNormalWindowLevel
     panel.collectionBehavior = mode === 'float' ? 1 | 256 : 0; // all Spaces + over full-screen apps
-    panel.hidesOnDeactivate = !!pref('autoHide', false);
+    panel.hidesOnDeactivate = mode === 'float' && !!pref('autoHide', false);
   }
   panel.alphaValue = pref('opacity', 1);
 }
 
-function makePanel() {
+function mainUrl() {
+  const v = pref('mainView', 'tabs');
+  return v === 'tabs' ? WIDGET_URL : WIDGET_URL + '&view=' + v;
+}
+
+/** One Nexus window: a slim panel with the web app inside, remembering its own place and size. */
+function makeWindow(title, url, autosave, offsetY) {
   const rect = $.NSMakeRect(0, 0, 380, 600);
   // titled · closable · resizable · utility (slim title bar)
-  panel = $.NSPanel.alloc.initWithContentRectStyleMaskBackingDefer(rect, 1 | 2 | 8 | 16, 2, false);
-  panel.title = 'Nexus';
-  panel.releasedWhenClosed = false;
-  panel.becomesKeyOnlyIfNeeded = false;
-  panel.floatingPanel = false;
-  panel.minSize = $.NSMakeSize(280, 360);
-  if (!panel.setFrameUsingName('NexusDeskPanel')) {
+  const p = $.NSPanel.alloc.initWithContentRectStyleMaskBackingDefer(rect, 1 | 2 | 8 | 16, 2, false);
+  p.title = title;
+  p.releasedWhenClosed = false;
+  p.becomesKeyOnlyIfNeeded = false;
+  p.floatingPanel = false;
+  p.minSize = $.NSMakeSize(240, 320);
+  if (!p.setFrameUsingName(autosave)) {
     const vis = $.NSScreen.mainScreen.visibleFrame;
-    panel.setFrameOrigin($.NSMakePoint(vis.origin.x + vis.size.width - 400, vis.origin.y + vis.size.height - 620));
+    p.setFrameOrigin($.NSMakePoint(vis.origin.x + vis.size.width - 400 - offsetY, vis.origin.y + vis.size.height - 620));
   }
-  panel.frameAutosaveName = 'NexusDeskPanel';
+  p.frameAutosaveName = autosave;
 
   const cfg = $.WKWebViewConfiguration.alloc.init;
   cfg.preferences.javaScriptCanOpenWindowsAutomatically = true;
-  web = $.WKWebView.alloc.initWithFrameConfiguration(panel.contentView.bounds, cfg);
-  web.autoresizingMask = 2 | 16; // follow the window's width and height
-  web.customUserAgent = USER_AGENT;
-  web.UIDelegate = controller;
-  if (web.respondsToSelector('setInspectable:')) web.inspectable = true;
-  panel.contentView.addSubview(web);
-  web.loadRequest($.NSURLRequest.requestWithURL($.NSURL.URLWithString(WIDGET_URL)));
+  const w = $.WKWebView.alloc.initWithFrameConfiguration(p.contentView.bounds, cfg);
+  w.autoresizingMask = 2 | 16; // follow the window's width and height
+  w.customUserAgent = USER_AGENT;
+  w.UIDelegate = controller;
+  if (w.respondsToSelector('setInspectable:')) w.inspectable = true;
+  p.contentView.addSubview(w);
+  w.loadRequest($.NSURLRequest.requestWithURL($.NSURL.URLWithString(url)));
+  return { p: p, w: w };
+}
+
+function makePanel() {
+  const m = makeWindow('Nexus', mainUrl(), 'NexusDeskPanel', 0);
+  panel = m.p;
+  web = m.w;
+  if (pref('calWindow', false)) makeCalendarWindow();
   applyMode();
+}
+
+/** The optional second window with just the calendar (Settings: "Separate calendar window"). */
+function makeCalendarWindow() {
+  if (calPanel) return;
+  const c = makeWindow('Nexus Calendar', WIDGET_URL + '&view=calendar', 'NexusDeskCalendar', 400);
+  calPanel = c.p;
+  calWeb = c.w;
+}
+
+function closeCalendarWindow() {
+  if (!calPanel) return;
+  calPanel.orderOut(null);
+  calWeb.loadHTMLStringBaseURL('', $());
+  calPanel = null;
+  calWeb = null;
 }
 
 function isShown() {
@@ -121,12 +169,14 @@ function isShown() {
 
 function show() {
   $.NSApp.activateIgnoringOtherApps(true);
+  if (calPanel) calPanel.orderFrontRegardless;
   panel.makeKeyAndOrderFront(null);
   panel.orderFrontRegardless;
 }
 
 function hide() {
   panel.orderOut(null);
+  if (calPanel) calPanel.orderOut(null);
 }
 
 function toggle() {
@@ -136,40 +186,35 @@ function toggle() {
 
 // ─── Hot corner ────────────────────────────────────────────────────────────
 
-function cornerHit(corner) {
-  const p = $.NSEvent.mouseLocation;
+/** Rebuilds the corner tripwires (one per screen) for the chosen corner; none when off. */
+function rebuildCorners() {
+  corners.forEach((w) => w.orderOut(null));
+  corners = [];
+  if (dwellTimer) {
+    dwellTimer.invalidate;
+    dwellTimer = null;
+  }
+  const corner = pref('corner', 'off');
+  if (corner === 'off') return;
   const screens = $.NSScreen.screens.js;
   for (let i = 0; i < screens.length; i++) {
     const f = screens[i].frame;
-    const x0 = f.origin.x;
-    const y0 = f.origin.y;
-    const x1 = x0 + f.size.width;
-    const y1 = y0 + f.size.height;
-    if (p.x < x0 - 1 || p.x > x1 + 1 || p.y < y0 - 1 || p.y > y1 + 1) continue;
-    const left = p.x <= x0 + 2;
-    const right = p.x >= x1 - 3;
-    const bottom = p.y <= y0 + 2;
-    const top = p.y >= y1 - 3;
-    if (corner === 'tl') return left && top;
-    if (corner === 'tr') return right && top;
-    if (corner === 'bl') return left && bottom;
-    if (corner === 'br') return right && bottom;
-  }
-  return false;
-}
-
-function tick() {
-  const corner = pref('corner', 'off');
-  if (corner === 'off') return;
-  if (cornerHit(corner)) {
-    dwell += TICK_S * 1000;
-    if (armed && dwell >= HOT_CORNER_DWELL_MS) {
-      armed = false;
-      toggle();
-    }
-  } else {
-    dwell = 0;
-    armed = true;
+    const x = corner === 'tl' || corner === 'bl' ? f.origin.x : f.origin.x + f.size.width - TRIPWIRE;
+    const y = corner === 'bl' || corner === 'br' ? f.origin.y : f.origin.y + f.size.height - TRIPWIRE;
+    // borderless · non-activating: never takes focus, never shows in the Dock or ⌘Tab.
+    const w = $.NSPanel.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(x, y, TRIPWIRE, TRIPWIRE), 128, 2, false);
+    w.opaque = false;
+    w.hasShadow = false;
+    // Almost invisible, but not fully clear: fully clear windows let the pointer pass through unseen.
+    w.backgroundColor = $.NSColor.colorWithCalibratedWhiteAlpha(0, 0.01);
+    w.level = 1000;
+    w.collectionBehavior = 1 | 16 | 64 | 256; // all Spaces · stationary · no ⌘\` · over full-screen apps
+    w.releasedWhenClosed = false;
+    const v = w.contentView;
+    // entered/exited · active even when Nexus isn't the front app · follows the view's size
+    v.addTrackingArea($.NSTrackingArea.alloc.initWithRectOptionsOwnerUserInfo(v.bounds, 0x01 | 0x80 | 0x200, controller, $()));
+    w.orderFrontRegardless;
+    corners.push(w);
   }
 }
 
@@ -299,20 +344,41 @@ function buildMenu() {
     modeMenu.addItem(it);
   });
   modeMenu.addItem($.NSMenuItem.separatorItem);
-  SIZES.forEach((x, i) => modeMenu.addItem(item('Size: ' + x[0], 'setSize:', '', i)));
+  const cur = panel ? panel.frame.size : null;
+  const nearest = cur ? SIZES.reduce((best, x, i) => (Math.abs(x[1] - cur.width) + Math.abs(x[2] - cur.height) < Math.abs(SIZES[best][1] - cur.width) + Math.abs(SIZES[best][2] - cur.height) ? i : best), 0) : -1;
+  const exact = cur && nearest >= 0 && Math.abs(SIZES[nearest][1] - cur.width) + Math.abs(SIZES[nearest][2] - cur.height) < 12;
+  SIZES.forEach((x, i) => {
+    const it = item('Size: ' + x[0], 'setSize:', '', i);
+    it.state = exact && i === nearest ? 1 : 0;
+    modeMenu.addItem(it);
+  });
   modeMenu.addItem($.NSMenuItem.separatorItem);
   OPACITY.forEach((o, i) => {
-    const it = item(o === 1 ? 'Opaque' : Math.round((1 - o) * 100) + '% see-through', 'setOpacity:', '', i);
+    const it = item(OPACITY_LABELS[i], 'setOpacity:', '', i);
     it.state = Math.abs(pref('opacity', 1) - o) < 0.001 ? 1 : 0;
     modeMenu.addItem(it);
   });
   modeMenu.addItem($.NSMenuItem.separatorItem);
   const autoHide = item('Hide when I click another app', 'toggleAutoHide:');
   autoHide.state = pref('autoHide', false) ? 1 : 0;
-  autoHide.enabled = mode !== 'desktop';
+  autoHide.enabled = mode === 'float';
   modeMenu.addItem(autoHide);
   modeRoot.submenu = modeMenu;
   m.addItem(modeRoot);
+
+  const mainView = pref('mainView', 'tabs');
+  const viewRoot = item('Main window shows', null);
+  const viewMenu = $.NSMenu.alloc.init;
+  MAIN_VIEWS.forEach((v, i) => {
+    const it = item(v[1], 'setMainView:', '', i);
+    it.state = v[0] === mainView ? 1 : 0;
+    viewMenu.addItem(it);
+  });
+  viewRoot.submenu = viewMenu;
+  m.addItem(viewRoot);
+  const cal = item('Separate calendar window', 'toggleCalWindow:');
+  cal.state = pref('calWindow', false) ? 1 : 0;
+  m.addItem(cal);
 
   const corner = pref('corner', 'off');
   const cornerRoot = item('Hot corner' + (corner === 'off' ? '' : ': ' + CORNERS.find((c) => c[0] === corner)[1]), null);
@@ -378,7 +444,13 @@ ObjC.registerSubclass({
         if (t) setPref('openIn', t.key);
       }
     },
-    'reload:': { types: ['void', ['id']], implementation: () => web.reload },
+    'reload:': {
+      types: ['void', ['id']],
+      implementation: () => {
+        web.reload;
+        if (calWeb) calWeb.reload;
+      }
+    },
     'setMode:': {
       types: ['void', ['id']],
       implementation: (sender) => {
@@ -406,10 +478,52 @@ ObjC.registerSubclass({
       types: ['void', ['id']],
       implementation: (sender) => {
         setPref('corner', CORNERS[sender.tag][0]);
-        dwell = 0;
-        armed = true;
+        rebuildCorners();
       }
     },
+    'setMainView:': {
+      types: ['void', ['id']],
+      implementation: (sender) => {
+        setPref('mainView', MAIN_VIEWS[sender.tag][0]);
+        web.loadRequest($.NSURLRequest.requestWithURL($.NSURL.URLWithString(mainUrl())));
+        show();
+      }
+    },
+    'toggleCalWindow:': {
+      types: ['void', ['id']],
+      implementation: () => {
+        const on = !pref('calWindow', false);
+        setPref('calWindow', on);
+        if (on) {
+          makeCalendarWindow();
+          applyMode();
+        } else closeCalendarWindow();
+        show();
+      }
+    },
+    // Hot corner tripwire: the pointer has to rest there a moment, so passing through doesn't count.
+    'mouseEntered:': {
+      types: ['void', ['id']],
+      implementation: () => {
+        if (dwellTimer) dwellTimer.invalidate;
+        dwellTimer = $.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(HOT_CORNER_DWELL_MS / 1000, controller, 'cornerFire:', null, false);
+      }
+    },
+    'mouseExited:': {
+      types: ['void', ['id']],
+      implementation: () => {
+        if (dwellTimer) dwellTimer.invalidate;
+        dwellTimer = null;
+      }
+    },
+    'cornerFire:': {
+      types: ['void', ['id']],
+      implementation: () => {
+        dwellTimer = null;
+        toggle();
+      }
+    },
+    'screensChanged:': { types: ['void', ['id']], implementation: () => rebuildCorners() },
     'toggleLogin:': { types: ['void', ['id']], implementation: () => setLogin(!loginEnabled()) },
     'uninstall:': {
       types: ['void', ['id']],
@@ -429,7 +543,6 @@ ObjC.registerSubclass({
       }
     },
     'quit:': { types: ['void', ['id']], implementation: () => $.NSApp.terminate(null) },
-    'tick:': { types: ['void', ['id']], implementation: () => tick() },
     // window.open(): Google's sign-in gets its own small window; anything else opens in the
     // user's browser (e.g. "Open in Nexus" on a task).
     'webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:': {
@@ -519,7 +632,9 @@ function run() {
   menu.delegate = controller;
   statusItem.menu = menu;
   show();
-  $.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(TICK_S, controller, 'tick:', null, true);
+  rebuildCorners();
+  // Displays plugged in, removed or rearranged: move the tripwires with them.
+  $.NSNotificationCenter.defaultCenter.addObserverSelectorNameObject(controller, 'screensChanged:', 'NSApplicationDidChangeScreenParametersNotification', $());
 }
 
 // Clicking the app again (Finder, Spotlight, login) brings the window back.

@@ -33,6 +33,7 @@ import { canInstall, isStandalone, promptInstall } from '../state/install';
 import { isPc, isWide } from '../state/viewport';
 import { APP_VERSION } from '../config';
 import { downloadIcs } from './addToCalendar';
+import { FeedSettings } from './FeedSettings';
 import { Icon, type IconName } from './icons';
 import { miniSupported, openMiniWindow } from './MiniWindow';
 import { Avatar } from './Shell';
@@ -235,8 +236,9 @@ function DeskCard({ os }: { os: 'mac' | 'windows' }) {
       </div>
       <ul class="feats">
         <li>A small Nexus window that {mac ? 'floats over every app or sits on the desktop like a widget' : 'stays on top of every app'}</li>
-        <li>Hot corner: push the pointer into a corner you pick to show or hide it</li>
-        <li>Quick add, the matrix, today and the next two weeks · tick tasks off in place</li>
+        <li>Hot corner: push the pointer into a corner you pick to show or hide it · uses no power while it waits</li>
+        <li>Matrix, Today and a calendar with meetings and clashes · open a task to rename it, tick its checklist, move it or set a deadline</li>
+        <li>Choose what the main window shows, or add a separate calendar window</li>
         <li>Size presets{mac ? ', transparency' : ''} and start {mac ? 'at login' : 'with Windows'} · uninstall from its menu</li>
       </ul>
       <CommandBox
@@ -418,7 +420,7 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
       case 'reminders':
         return `Snooze ${snoozeLabel(s.snoozeMinutes)} · ${dueDefaults.length ? `${dueDefaults.length} deadline alert${dueDefaults.length === 1 ? '' : 's'} at ${formatAlertTime(s.defaultDueAlertTime)}` : 'no deadline alerts'}`;
       case 'calendar':
-        return `${s.linkedCalendars.length ? `${s.linkedCalendars.length} linked · checked every ${refreshLabel(s.calendarRefreshMinutes)}` : 'No linked calendars'} · clash radar ${s.clashRadar ? 'on' : 'off'}`;
+        return `${s.linkedCalendars.length ? `${s.linkedCalendars.length} linked · checked every ${refreshLabel(s.calendarRefreshMinutes)}` : 'No linked calendars'} · clash radar ${s.clashRadar ? 'on' : 'off'}${s.calendarFeed ? ' · shown in your calendar apps' : ''}`;
       case 'tasks':
         return `${archivedCount} archived · ${deletedCount} recently deleted`;
       case 'appearance':
@@ -788,6 +790,9 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
               </InlineSetting>
               <p class="nx-set-inline-note">Also checked every time you open Nexus or the calendar.</p>
             </SettingsGroup>
+
+            <SectionHeader>Your calendar apps</SectionHeader>
+            <FeedSettings />
 
             <SectionHeader>Clash radar</SectionHeader>
             <SettingsGroup>

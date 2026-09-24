@@ -16,6 +16,12 @@
  * link fragment, so this worker stores an unreadable blob for at most 10 minutes and deletes it
  * the moment the other device collects it.
  *
+ * "Show Nexus in your calendar apps" publishes a read-only iCal feed at `/feed/<secret>.ics` that
+ * Google, Apple and Outlook Calendar subscribe to. It is opt-in: this is the one place task titles
+ * and dates are stored here, because those apps must be able to read them. The address is a
+ * 256-bit secret (only its SHA-256 is stored), and only devices holding the separate write key can
+ * change or delete it.
+ *
  * Secrets (set with `wrangler secret put`): VAPID_PRIVATE_JWK, VAPID_PUBLIC (base64url raw P-256),
  * GOOGLE_CLIENT_SECRET (optional; without it the app falls back to hourly Google sign-in).
  */
@@ -43,6 +49,11 @@ const PAIR_TTL_MS = 10 * 60 * 1000;
 const PAIR_MAX_CHARS = 96 * 1024;
 const PAIR_MAX_PENDING = 5000;
 const PAIR_ID = /^[A-Za-z0-9_-]{22,64}$/;
+/** Calendar feeds: a 32-byte secret address, a size cap, and feeds nobody updated for a year go. */
+const FEED_ID = /^[A-Za-z0-9_-]{43}$/;
+const FEED_MAX_BYTES = 1024 * 1024;
+const FEED_MAX = 50000;
+const FEED_IDLE_MS = 365 * 24 * 60 * 60 * 1000;
 /** Calendar providers whose private iCal links may be fetched for a device (no open proxy). */
 const ICS_HOSTS = [/^calendar\.google\.com$/, /^([a-z0-9-]+\.)*icloud\.com$/, /^calendar\.zoho\.(com|eu|in|com\.au|jp)$/, /^outlook\.(office365|live)\.com$/, /^outlook\.office\.com$/];
 
@@ -70,6 +81,8 @@ export default {
 
       // ── Google sign-in that lasts (code → refresh token, returned to the device only) ──
       // Scan to set up: no device registration needed (a brand-new device has none yet).
+      if (url.pathname.startsWith('/feed/')) return await feed(req, env, cors, url.pathname.slice(6));
+
       if (url.pathname.startsWith('/pair/')) return await pair(req, env, cors, url.pathname.slice(6), url.searchParams.has('peek'));
 
       if (url.pathname.startsWith('/oauth/')) {
@@ -236,8 +249,89 @@ export default {
   async scheduled(_evt: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(deliverDue(env));
     ctx.waitUntil(ensurePairTable(env).then(() => env.DB.prepare('DELETE FROM pairs WHERE expires_at < ?').bind(Date.now()).run()).catch(() => {}));
+    // Once a day is plenty for forgotten calendar feeds.
+    if (new Date(_evt.scheduledTime).getUTCHours() === 3 && new Date(_evt.scheduledTime).getUTCMinutes() === 0) {
+      ctx.waitUntil(ensureFeedTable(env).then(() => env.DB.prepare('DELETE FROM feeds WHERE updated_at < ?').bind(Date.now() - FEED_IDLE_MS).run()).catch(() => {}));
+    }
   }
 };
+
+// ─── Calendar feed ─────────────────────────────────────────────────────────────
+
+let feedTableReady = false;
+async function ensureFeedTable(env: Env): Promise<void> {
+  if (feedTableReady) return;
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS feeds (id TEXT PRIMARY KEY, key_hash TEXT NOT NULL, ics TEXT NOT NULL, updated_at INTEGER NOT NULL)').run();
+  feedTableReady = true;
+}
+
+async function sha256Hex(text: string): Promise<string> {
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
+  return Array.from(h, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** Constant-time string compare (both are hex digests of equal length). */
+function sameHash(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let d = 0;
+  for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return d === 0;
+}
+
+/**
+ * GET  /feed/<secret>.ics            the calendar (for Google / Apple / Outlook; conditional GET).
+ * PUT  /feed/<secret>  Bearer <key>  replace it (the first PUT claims the address for that key).
+ * DELETE /feed/<secret> Bearer <key> turn it off.
+ */
+async function feed(req: Request, env: Env, cors: Record<string, string>, rest: string): Promise<Response> {
+  const secret = rest.replace(/\.ics$/i, '');
+  if (!FEED_ID.test(secret)) return new Response('Not found', { status: 404 });
+  await ensureFeedTable(env);
+  const id = await sha256Hex(`feed:${secret}`);
+
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    const row = await env.DB.prepare('SELECT ics, updated_at FROM feeds WHERE id=?').bind(id).first<{ ics: string; updated_at: number }>();
+    if (!row) return new Response('Not found', { status: 404, headers: { ...cors, 'Cache-Control': 'no-store' } });
+    const etag = `"${row.updated_at.toString(36)}"`;
+    const headers = {
+      ...cors,
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'Cache-Control': 'private, max-age=300',
+      ETag: etag,
+      'Last-Modified': new Date(row.updated_at).toUTCString(),
+      'X-Robots-Tag': 'noindex'
+    };
+    if (req.headers.get('If-None-Match') === etag) return new Response(null, { status: 304, headers });
+    return new Response(req.method === 'HEAD' ? null : row.ics, { status: 200, headers });
+  }
+
+  const auth = req.headers.get('Authorization') ?? '';
+  const key = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  if (!/^[A-Za-z0-9_-]{43}$/.test(key)) return json({ error: 'unauthorized' }, 401, cors);
+  const keyHash = await sha256Hex(`feedkey:${key}`);
+  const row = await env.DB.prepare('SELECT key_hash FROM feeds WHERE id=?').bind(id).first<{ key_hash: string }>();
+  if (row && !sameHash(row.key_hash, keyHash)) return json({ error: 'unauthorized' }, 401, cors);
+
+  if (req.method === 'DELETE') {
+    if (row) await env.DB.prepare('DELETE FROM feeds WHERE id=?').bind(id).run();
+    return json({ ok: true }, 200, cors);
+  }
+  if (req.method === 'PUT') {
+    const text = await req.text();
+    if (new TextEncoder().encode(text).length > FEED_MAX_BYTES) return json({ error: 'calendar too large' }, 413, cors);
+    if (!/^BEGIN:VCALENDAR\r?\n/.test(text) || !/END:VCALENDAR\s*$/.test(text)) return json({ error: 'not a calendar' }, 422, cors);
+    const now = Date.now();
+    if (!row) {
+      const n = await env.DB.prepare('SELECT COUNT(*) AS n FROM feeds').first<{ n: number }>();
+      if ((n?.n ?? 0) >= FEED_MAX) return json({ error: 'busy, try again later' }, 503, cors);
+      await env.DB.prepare('INSERT OR IGNORE INTO feeds (id, key_hash, ics, updated_at) VALUES (?,?,?,?)').bind(id, keyHash, text, now).run();
+    } else {
+      await env.DB.prepare('UPDATE feeds SET ics=?, updated_at=? WHERE id=? AND key_hash=?').bind(text, now, id, keyHash).run();
+    }
+    return json({ ok: true, updatedAt: now }, 200, cors);
+  }
+  return json({ error: 'not found' }, 404, cors);
+}
 
 // ─── Scan to set up ────────────────────────────────────────────────────────────
 

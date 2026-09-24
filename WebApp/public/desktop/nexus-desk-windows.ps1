@@ -4,6 +4,7 @@
 # so you stay signed in exactly as in that browser), and adds from the tray icon:
 #   - Keep on top of every app, or behave like a normal window
 #   - A hot corner that shows / hides it (pick any corner, or none)
+#   - What the main window shows, and an optional separate calendar window
 #   - Size presets, start with Windows, uninstall
 #
 # Installed by install-windows.ps1 into %LOCALAPPDATA%\NexusDesk. Settings: settings.json there.
@@ -12,7 +13,8 @@
 $ErrorActionPreference = 'Stop'
 $NexusUrl = '__NEXUS_URL__'
 $WidgetUrl = $NexusUrl + '?mode=widget'
-$WindowTitle = 'Nexus Widget'   # the widget page's document.title
+$WindowTitle = 'Nexus Widget'             # the widget page's document.title
+$CalendarTitle = 'Nexus Calendar Widget'   # the separate calendar window's title
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $SettingsPath = Join-Path $Here 'settings.json'
 $StartupLink = Join-Path ([Environment]::GetFolderPath('Startup')) 'Nexus Desk.lnk'
@@ -44,6 +46,8 @@ public static class NexusWin {
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
+  [DllImport("user32.dll")] static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr w, IntPtr l);
+  public static void Close(IntPtr h) { PostMessage(h, 0x0010, IntPtr.Zero, IntPtr.Zero); } // WM_CLOSE
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
 
   public static IntPtr Find(string title) {
@@ -65,15 +69,40 @@ public static class NexusWin {
     SetWindowPos(h, IntPtr.Zero, r.Left, r.Top, w, ht, 0x0004 | 0x0010); // SWP_NOZORDER | SWP_NOACTIVATE
   }
 }
-'@
+
+/// Hot corner, checked in compiled code: PowerShell only runs when the corner is actually hit.
+/// The timer runs only while a corner is chosen.
+public class CornerWatcher {
+  public event EventHandler Hit;
+  readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
+  string corner = "off";
+  int dwell;
+  bool armed = true;
+  public int DwellMs = 250;
+  public CornerWatcher() { timer.Interval = 150; timer.Tick += (s, e) => Check(); }
+  public void SetCorner(string c) {
+    corner = c ?? "off"; dwell = 0; armed = true;
+    if (corner == "off") timer.Stop(); else timer.Start();
+  }
+  void Check() {
+    var p = System.Windows.Forms.Cursor.Position;
+    var b = System.Windows.Forms.Screen.FromPoint(p).Bounds;
+    bool left = p.X <= b.Left + 1, right = p.X >= b.Right - 2, top = p.Y <= b.Top + 1, bottom = p.Y >= b.Bottom - 2;
+    bool hit = (corner == "tl" && left && top) || (corner == "tr" && right && top) || (corner == "bl" && left && bottom) || (corner == "br" && right && bottom);
+    if (!hit) { dwell = 0; armed = true; return; }
+    dwell += timer.Interval;
+    if (armed && dwell >= DwellMs) { armed = false; var h = Hit; if (h != null) h(this, EventArgs.Empty); }
+  }
+}
+'@ -ReferencedAssemblies System.Windows.Forms, System.Drawing
 
 # --- Settings ---------------------------------------------------------------
 
-$script:Cfg = [ordered]@{ onTop = $true; corner = 'off'; browser = ''; welcomed = $false }
+$script:Cfg = [ordered]@{ onTop = $true; corner = 'off'; browser = ''; welcomed = $false; mainView = 'tabs'; calWindow = $false }
 if (Test-Path $SettingsPath) {
   try {
     $saved = Get-Content $SettingsPath -Raw | ConvertFrom-Json
-    foreach ($k in @('onTop', 'corner', 'browser', 'welcomed')) { if ($null -ne $saved.$k) { $script:Cfg[$k] = $saved.$k } }
+    foreach ($k in @('onTop', 'corner', 'browser', 'welcomed', 'mainView', 'calWindow')) { if ($null -ne $saved.$k) { $script:Cfg[$k] = $saved.$k } }
   } catch { }
 }
 function Save-Settings { $script:Cfg | ConvertTo-Json | Set-Content -Path $SettingsPath -Encoding UTF8 }
@@ -100,6 +129,12 @@ function Find-Browser {
 # --- Widget window ----------------------------------------------------------
 
 $script:Hwnd = [IntPtr]::Zero
+$script:CalHwnd = [IntPtr]::Zero
+
+function Main-Url {
+  if ($script:Cfg.mainView -eq 'matrix' -or $script:Cfg.mainView -eq 'today') { return $WidgetUrl + '&view=' + $script:Cfg.mainView }
+  return $WidgetUrl
+}
 
 function Get-Widget {
   if ($script:Hwnd -ne [IntPtr]::Zero -and [NexusWin]::IsWindow($script:Hwnd)) { return $script:Hwnd }
@@ -107,26 +142,40 @@ function Get-Widget {
   return $script:Hwnd
 }
 
-function Open-Widget {
+function Get-Calendar {
+  if ($script:CalHwnd -ne [IntPtr]::Zero -and [NexusWin]::IsWindow($script:CalHwnd)) { return $script:CalHwnd }
+  $script:CalHwnd = [NexusWin]::Find($CalendarTitle)
+  return $script:CalHwnd
+}
+
+function Open-AppWindow($url, [scriptblock]$find) {
   $exe = Find-Browser
   if (-not $exe) {
     [System.Windows.Forms.MessageBox]::Show('Nexus Desk needs Microsoft Edge, Google Chrome or Brave.', 'Nexus Desk') | Out-Null
     return
   }
-  Start-Process -FilePath $exe -ArgumentList @("--app=$WidgetUrl", '--window-size=380,620')
+  Start-Process -FilePath $exe -ArgumentList @("--app=$url", '--window-size=380,620')
   for ($i = 0; $i -lt 60; $i++) {
     Start-Sleep -Milliseconds 250
-    if ((Get-Widget) -ne [IntPtr]::Zero) { break }
+    if ((& $find) -ne [IntPtr]::Zero) { break }
   }
   Apply-OnTop
 }
 
+function Open-Widget { Open-AppWindow (Main-Url) { Get-Widget } }
+function Open-Calendar { Open-AppWindow ($WidgetUrl + '&view=calendar') { Get-Calendar } }
+
 function Apply-OnTop {
-  $h = Get-Widget
-  if ($h -ne [IntPtr]::Zero) { [NexusWin]::OnTop($h, [bool]$script:Cfg.onTop) }
+  foreach ($h in @((Get-Widget), (Get-Calendar))) {
+    if ($h -ne [IntPtr]::Zero) { [NexusWin]::OnTop($h, [bool]$script:Cfg.onTop) }
+  }
 }
 
 function Show-Widget {
+  if ([bool]$script:Cfg.calWindow) {
+    $c = Get-Calendar
+    if ($c -eq [IntPtr]::Zero) { Open-Calendar } else { [NexusWin]::ShowWindow($c, 9) | Out-Null }
+  }
   $h = Get-Widget
   if ($h -eq [IntPtr]::Zero) { Open-Widget; return }
   [NexusWin]::ShowWindow($h, 9) | Out-Null   # SW_RESTORE
@@ -135,8 +184,15 @@ function Show-Widget {
 }
 
 function Hide-Widget {
-  $h = Get-Widget
-  if ($h -ne [IntPtr]::Zero) { [NexusWin]::ShowWindow($h, 0) | Out-Null }   # SW_HIDE
+  foreach ($h in @((Get-Widget), (Get-Calendar))) {
+    if ($h -ne [IntPtr]::Zero) { [NexusWin]::ShowWindow($h, 0) | Out-Null }   # SW_HIDE
+  }
+}
+
+function Close-Calendar {
+  $c = Get-Calendar
+  if ($c -ne [IntPtr]::Zero) { [NexusWin]::ShowWindow($c, 0) | Out-Null; [NexusWin]::Close($c) }
+  $script:CalHwnd = [IntPtr]::Zero
 }
 
 function Toggle-Widget {
@@ -180,8 +236,9 @@ $menu = New-Object System.Windows.Forms.ContextMenuStrip
 $miShow = $menu.Items.Add('Show / hide Nexus')
 $miShow.Font = New-Object System.Drawing.Font($miShow.Font, [System.Drawing.FontStyle]::Bold)
 $miShow.add_Click({ Toggle-Widget })
-$miFull = $menu.Items.Add('Open full Nexus in browser')
-$miFull.add_Click({ Start-Process $NexusUrl })
+$miFull = $menu.Items.Add('Open full Nexus')
+# The same browser as the widget, so you're signed in the same way.
+$miFull.add_Click({ $exe = Find-Browser; if ($exe) { Start-Process -FilePath $exe -ArgumentList @($NexusUrl) } else { Start-Process $NexusUrl } })
 $menu.Items.Add('-') | Out-Null
 
 $miTop = New-Object System.Windows.Forms.ToolStripMenuItem('Keep on top of all apps')
@@ -203,6 +260,36 @@ foreach ($s in @(@('Small', 330, 500), @('Medium', 390, 640), @('Large (two-colu
 }
 $menu.Items.Add($miSize) | Out-Null
 
+$views = [ordered]@{ tabs = 'All views (Matrix, Today, Calendar)'; matrix = 'Matrix only'; today = 'Today only' }
+$miView = New-Object System.Windows.Forms.ToolStripMenuItem('Main window shows')
+foreach ($key in $views.Keys) {
+  $it = New-Object System.Windows.Forms.ToolStripMenuItem($views[$key])
+  $it.Tag = $key
+  $it.Checked = ($script:Cfg.mainView -eq $key)
+  $it.add_Click({
+    param($sender)
+    $script:Cfg.mainView = $sender.Tag
+    foreach ($x in $miView.DropDownItems) { $x.Checked = ($x.Tag -eq $sender.Tag) }
+    Save-Settings
+    # Reopen the main window on its new view.
+    $h = Get-Widget
+    if ($h -ne [IntPtr]::Zero) { [NexusWin]::Close($h); $script:Hwnd = [IntPtr]::Zero; Start-Sleep -Milliseconds 400 }
+    Show-Widget
+  })
+  $miView.DropDownItems.Add($it) | Out-Null
+}
+$menu.Items.Add($miView) | Out-Null
+
+$miCal = New-Object System.Windows.Forms.ToolStripMenuItem('Separate calendar window')
+$miCal.Checked = [bool]$script:Cfg.calWindow
+$miCal.add_Click({
+  $script:Cfg.calWindow = -not [bool]$script:Cfg.calWindow
+  $miCal.Checked = [bool]$script:Cfg.calWindow
+  Save-Settings
+  if ($script:Cfg.calWindow) { Show-Widget } else { Close-Calendar }
+})
+$menu.Items.Add($miCal) | Out-Null
+
 $corners = [ordered]@{ off = 'Off'; tl = 'Top left'; tr = 'Top right'; bl = 'Bottom left'; br = 'Bottom right' }
 $miCorner = New-Object System.Windows.Forms.ToolStripMenuItem('Hot corner')
 foreach ($key in $corners.Keys) {
@@ -214,6 +301,7 @@ foreach ($key in $corners.Keys) {
     $script:Cfg.corner = $sender.Tag
     foreach ($x in $miCorner.DropDownItems) { if ($x -is [System.Windows.Forms.ToolStripMenuItem]) { $x.Checked = ($x.Tag -eq $sender.Tag) } }
     Save-Settings
+    $watcher.SetCorner($script:Cfg.corner)
   })
   $miCorner.DropDownItems.Add($it) | Out-Null
 }
@@ -252,29 +340,9 @@ $tray.Visible = $true
 
 # --- Hot corner -------------------------------------------------------------
 
-$script:Dwell = 0
-$script:Armed = $true
-$timer = New-Object System.Windows.Forms.Timer
-$timer.Interval = 120
-$timer.add_Tick({
-  $c = $script:Cfg.corner
-  if ($c -eq 'off') { return }
-  $p = [System.Windows.Forms.Cursor]::Position
-  $b = [System.Windows.Forms.Screen]::FromPoint($p).Bounds
-  $left = $p.X -le $b.Left + 1
-  $right = $p.X -ge $b.Right - 2
-  $top = $p.Y -le $b.Top + 1
-  $bottom = $p.Y -ge $b.Bottom - 2
-  $hit = ($c -eq 'tl' -and $left -and $top) -or ($c -eq 'tr' -and $right -and $top) -or ($c -eq 'bl' -and $left -and $bottom) -or ($c -eq 'br' -and $right -and $bottom)
-  if ($hit) {
-    $script:Dwell += $timer.Interval
-    if ($script:Armed -and $script:Dwell -ge 250) { $script:Armed = $false; Toggle-Widget }
-  } else {
-    $script:Dwell = 0
-    $script:Armed = $true
-  }
-})
-$timer.Start()
+$watcher = New-Object CornerWatcher
+$watcher.add_Hit({ Toggle-Widget })
+$watcher.SetCorner($script:Cfg.corner)
 
 $ErrorActionPreference = 'Continue'
 Show-Widget
@@ -285,6 +353,6 @@ if (-not $script:Cfg.welcomed) {
   Save-Settings
 }
 [System.Windows.Forms.Application]::Run()
-$timer.Stop()
+$watcher.SetCorner('off')
 $tray.Dispose()
 $mutex.ReleaseMutex()

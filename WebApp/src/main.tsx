@@ -5,6 +5,7 @@ import * as db from './db/tasks';
 import { startLinkedAutoRefresh } from './calendar/linked';
 import { startClashRadar } from './calendar/radar';
 import { parsePairLink } from './pair/pair';
+import { loadFeedStatus, publishFeed, schedulePublishFeed } from './calendar/feed';
 import { initReminders } from './reminders/push';
 import * as nav from './state/nav';
 import { allTasks, onTasksWritten, reload } from './state/store';
@@ -44,16 +45,34 @@ const widgetMode = (() => {
   }
 })();
 
+/** ?view=calendar|matrix|today: a Desk window dedicated to one view (e.g. a separate calendar window). */
+const widgetView = (() => {
+  const q = new URLSearchParams(location.search);
+  const v = q.get('view');
+  try {
+    // Opened by the Desk (mode=widget in the address): the address decides, even "no view".
+    // Back from Google's sign-in (no mode in the address): the remembered view is kept.
+    if (q.get('mode') === 'widget') {
+      if (v) sessionStorage.setItem('nexus_widget_view', v);
+      else sessionStorage.removeItem('nexus_widget_view');
+    }
+    const w = v ?? sessionStorage.getItem('nexus_widget_view');
+    return w === 'calendar' || w === 'matrix' || w === 'today' ? w : undefined;
+  } catch {
+    return v === 'calendar' || v === 'matrix' || v === 'today' ? v : undefined;
+  }
+})();
+
 if (widgetMode) bootWidget();
 else bootApp();
 
 function bootWidget() {
-  document.title = 'Nexus Widget';
+  document.title = widgetView === 'calendar' ? 'Nexus Calendar Widget' : 'Nexus Widget';
   document.body.classList.add('nx-mini-body', 'nx-widget-page');
   void ready.then(() => {
     render(
       <>
-        <MiniApp win={window} widget />
+        <MiniApp win={window} widget only={widgetView} />
         <PromptHost />
         <Toasts />
       </>,
@@ -61,6 +80,11 @@ function bootWidget() {
     );
     void finishRedirectSignIn().then((msg) => msg && showSnack(msg, undefined, 4000));
     startLinkedAutoRefresh();
+    startClashRadar();
+    if (import.meta.env.DEV) void installDevHook();
+    // Edits made in the widget reach "Show Nexus in your calendar apps" too.
+    void loadFeedStatus();
+    onTasksWritten(schedulePublishFeed);
     // Show what each sync brought down (the full app does this in App.tsx).
     onSyncState((busy, result) => {
       if (!busy && result) void reload();
@@ -90,19 +114,7 @@ function bootApp() {
   );
   void ready.then(async () => {
     render(<App />, root!);
-    // Dev-only handle for scripted UI checks (tree-shaken out of production builds).
-    if (import.meta.env.DEV) {
-      const [store, settings, manager, prompts, linked, ics, pair] = await Promise.all([
-        import('./state/store'),
-        import('./settings/store'),
-        import('./sync/manager'),
-        import('./state/prompts'),
-        import('./calendar/linked'),
-        import('./calendar/ics'),
-        import('./pair/pair')
-      ]);
-      Object.assign(window, { __nx: { nav, store, settings, manager, prompts, db, linked, ics, pair } });
-    }
+    if (import.meta.env.DEV) void installDevHook();
     initReminders();
     startLinkedAutoRefresh();
     startClashRadar();
@@ -133,6 +145,10 @@ function bootApp() {
       // "Open Nexus on: Calendar". Back from it shows the matrix.
       nav.open({ kind: 'calendar' });
     }
+    // Live calendar feed: resend a few seconds after the last change (only if the content changed).
+    // Tasks ticked off from a notification while Nexus was closed: sent now (skipped if unchanged).
+    void loadFeedStatus().then(() => publishFeed());
+    onTasksWritten(schedulePublishFeed);
     // Windows widgets re-render from IndexedDB after every change.
     let widgetTimer = 0;
     onTasksWritten(() => {
@@ -158,4 +174,19 @@ navigator.serviceWorker?.addEventListener('message', (e) => {
 
 if ('serviceWorker' in navigator) {
   import('virtual:pwa-register').then(({ registerSW }) => registerSW({ immediate: true }));
+}
+
+/** Dev-only handle for scripted UI checks (tree-shaken out of production builds). */
+async function installDevHook(): Promise<void> {
+  const [store, settings, manager, prompts, linked, ics, pair, feed] = await Promise.all([
+    import('./state/store'),
+    import('./settings/store'),
+    import('./sync/manager'),
+    import('./state/prompts'),
+    import('./calendar/linked'),
+    import('./calendar/ics'),
+    import('./pair/pair'),
+    import('./calendar/feed')
+  ]);
+  Object.assign(window, { __nx: { nav, store, settings, manager, prompts, db, linked, ics, pair, feed } });
 }

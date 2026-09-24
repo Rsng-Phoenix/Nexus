@@ -1,19 +1,24 @@
+import '../styles/mini.css';
 import { signal } from '@preact/signals';
 import type { JSX } from 'preact';
 import { render } from 'preact';
 import { useMemo, useRef, useState } from 'preact/hooks';
 import { addDaysIso, dateToIso, isoToDate, todayIso } from '../calendar/deadline';
-import { buildCalendar, type CalItem } from '../calendar/items';
+import { buildCalendar, monthGrid } from '../calendar/items';
+import { clashesByDay } from '../calendar/clashes';
+import { clashes } from '../calendar/radar';
+import { fromStorage, toStorage } from '../notes/codec';
+import { nexusLogoHtml } from '../ui/nexus-logo';
 import { calendarSourceLabel, linkedState } from '../calendar/linked';
 import { haptic } from '../lib/haptics';
 import { settingsSig, subscribeSettings } from '../settings/store';
 import { showSnack } from '../state/toasts';
 import { runSync, signInMessage } from '../sync/manager';
 import * as nav from '../state/nav';
-import { activeTasks, addTask, allTasks, byPriority, setChecked } from '../state/store';
+import { activeTasks, addTask, allTasks, byPriority, moveToPriority, setChecked, togglePin, updateTask } from '../state/store';
 import type { Priority, Task } from '../types';
 import { PRIORITIES, PRIORITY_META } from '../types';
-import { Icon } from './icons';
+import { Icon, type IconName } from './icons';
 import { DueBadge } from './Matrix';
 
 /**
@@ -111,21 +116,31 @@ function openInFull(task?: Task, widget?: boolean) {
   }
 }
 
-type Tab = 'matrix' | 'today' | 'week';
-const TABS: [Tab, string][] = [
-  ['matrix', 'Matrix'],
-  ['today', 'Today'],
-  ['week', 'Upcoming']
+
+type Tab = 'matrix' | 'today' | 'calendar';
+const TABS: [Tab, string, IconName][] = [
+  ['matrix', 'Matrix', 'widgets'],
+  ['today', 'Today', 'checklist'],
+  ['calendar', 'Calendar', 'calendar']
 ];
+const isTab = (t: unknown): t is Tab => TABS.some(([x]) => x === t);
+
+/** The task as it is right now: quick edits in a row (rename, then move) must not undo each other. */
+const fresh = (t: Task): Task => allTasks.value.find((x) => x.id === t.id) ?? t;
+
+/** Which task is open in place (one at a time). */
+const openTask = signal<number | null>(null);
 
 /**
  * The mini window's content. [widget]: running as the desktop widget page (Nexus Desk on Mac /
  * Windows) rather than inside the full app, so "open" launches the full app in the browser.
+ * [only]: a Desk window dedicated to one view (e.g. a separate calendar window); no tabs.
  */
-export function MiniApp({ win, widget = false }: { win: Window; widget?: boolean }) {
+export function MiniApp({ win, widget = false, only }: { win: Window; widget?: boolean; only?: Tab }) {
   const [tab, setTab] = useState<Tab>(() => {
-    const t = localStorage.getItem('nexus_mini_tab') as Tab;
-    return TABS.some(([x]) => x === t) ? t : 'matrix';
+    if (only) return only;
+    const t = localStorage.getItem('nexus_mini_tab');
+    return isTab(t) ? t : 'matrix';
   });
   const [signingIn, setSigningIn] = useState(false);
   const email = settingsSig.value.googleEmail;
@@ -135,6 +150,9 @@ export function MiniApp({ win, widget = false }: { win: Window; widget?: boolean
   const wide = win.innerWidth >= 520;
 
   const choose = (t: Tab) => {
+    if (t === tab) return;
+    haptic('DRAG_TICK');
+    openTask.value = null;
     setTab(t);
     try {
       localStorage.setItem('nexus_mini_tab', t);
@@ -154,16 +172,27 @@ export function MiniApp({ win, widget = false }: { win: Window; widget?: boolean
   return (
     <div class={`nx-mini ${wide ? 'wide' : ''}`}>
       <header class="nx-mini-head">
-        <b>NEXUS</b>
-        <nav class="nx-mini-tabs" role="tablist">
-          {TABS.map(([id, label]) => (
-            <button key={id} role="tab" aria-selected={tab === id} class={tab === id ? 'on' : ''} onClick={() => choose(id)}>
-              {label}
-            </button>
-          ))}
-        </nav>
+        <span class="brand" aria-label="Nexus">
+          <span class="mark" aria-hidden="true" dangerouslySetInnerHTML={{ __html: nexusLogoHtml(18) }} />
+          <b>NEXUS</b>
+        </span>
+        {only ? (
+          <span class="only">{TABS.find(([x]) => x === only)?.[1]}</span>
+        ) : (
+          <nav class="nx-mini-tabs" role="tablist" style={{ '--i': String(TABS.findIndex(([x]) => x === tab)) } as JSX.CSSProperties}>
+            <span class="pill" aria-hidden="true" />
+            {TABS.map(([id, label, icon]) => (
+              <button key={id} role="tab" aria-selected={tab === id} title={label} class={tab === id ? 'on' : ''} onClick={() => choose(id)}>
+                <Icon name={icon} size={14} />
+                <span class="lbl">{label}</span>
+              </button>
+            ))}
+          </nav>
+        )}
         <span class="grow" />
-        <span class="count" title="Open tasks">{open.length}</span>
+        <span class="count" title={`${open.length} open tasks`} key={open.length}>
+          {open.length}
+        </span>
         {widget && email && (
           <button class="nx-mini-icon" title={`Sync now · ${email}`} aria-label="Sync now" onClick={() => void runSync().then((r) => showSnack(r.message))}>
             <Icon name="sync" size={16} />
@@ -192,48 +221,51 @@ export function MiniApp({ win, widget = false }: { win: Window; widget?: boolean
           </button>
         </div>
       )}
-      <form
-        class="nx-mini-add"
-        style={{ '--c': PRIORITY_META[prio].color } as JSX.CSSProperties}
-        onSubmit={(e) => {
-          e.preventDefault();
-          add();
-        }}
-      >
-        <input
-          ref={input}
-          value={text}
-          placeholder={`Add to ${PRIORITY_META[prio].label}…`}
-          aria-label="New task"
-          onInput={(e) => setText(e.currentTarget.value)}
-          onKeyDown={(e) => {
-            // Alt+1…4 picks the priority without leaving the field.
-            if (e.altKey && /^[1-4]$/.test(e.key)) {
-              e.preventDefault();
-              setPrio(PRIORITIES[Number(e.key) - 1]);
-            }
+      {tab !== 'calendar' && (
+        <form
+          class="nx-mini-add"
+          style={{ '--c': PRIORITY_META[prio].color } as JSX.CSSProperties}
+          onSubmit={(e) => {
+            e.preventDefault();
+            add();
           }}
-        />
-        <span class="prios" role="radiogroup" aria-label="Priority">
-          {PRIORITIES.map((p, i) => (
-            <button
-              key={p}
-              type="button"
-              role="radio"
-              aria-checked={prio === p}
-              title={`${PRIORITY_META[p].label} (Alt+${i + 1})`}
-              class={prio === p ? 'on' : ''}
-              style={{ '--c': PRIORITY_META[p].color } as JSX.CSSProperties}
-              onClick={() => {
-                setPrio(p);
-                input.current?.focus();
-              }}
-            />
-          ))}
-        </span>
-      </form>
-      <div class="nx-mini-scroll">
-        {tab === 'matrix' ? <MiniMatrix widget={widget} /> : tab === 'today' ? <MiniToday widget={widget} /> : <MiniUpcoming widget={widget} />}
+        >
+          <Icon name="add" size={16} class="plus" />
+          <input
+            ref={input}
+            value={text}
+            placeholder={`Add to ${PRIORITY_META[prio].label}…`}
+            aria-label="New task"
+            onInput={(e) => setText(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              // Alt+1…4 picks the priority without leaving the field.
+              if (e.altKey && /^[1-4]$/.test(e.key)) {
+                e.preventDefault();
+                setPrio(PRIORITIES[Number(e.key) - 1]);
+              }
+            }}
+          />
+          <span class="prios" role="radiogroup" aria-label="Priority">
+            {PRIORITIES.map((p, i) => (
+              <button
+                key={p}
+                type="button"
+                role="radio"
+                aria-checked={prio === p}
+                title={`${PRIORITY_META[p].label} (Alt+${i + 1})`}
+                class={prio === p ? 'on' : ''}
+                style={{ '--c': PRIORITY_META[p].color } as JSX.CSSProperties}
+                onClick={() => {
+                  setPrio(p);
+                  input.current?.focus();
+                }}
+              />
+            ))}
+          </span>
+        </form>
+      )}
+      <div class="nx-mini-scroll" key={tab}>
+        {tab === 'matrix' ? <MiniMatrix widget={widget} /> : tab === 'today' ? <MiniToday widget={widget} /> : <MiniCalendar widget={widget} />}
       </div>
     </div>
   );
@@ -243,11 +275,11 @@ function MiniMatrix({ widget }: { widget: boolean }) {
   const groups = byPriority.value;
   return (
     <div class="nx-mini-quads">
-      {PRIORITIES.map((p) => {
+      {PRIORITIES.map((p, qi) => {
         const list = groups[p].filter((t) => !t.taskUuid.startsWith('nexus-tutorial-'));
         const openCount = list.filter((t) => !t.isCompleted && !t.isWontDo).length;
         return (
-          <section key={p} class="nx-mini-quad" style={{ '--c': PRIORITY_META[p].color } as JSX.CSSProperties}>
+          <section key={p} class="nx-mini-quad" style={{ '--c': PRIORITY_META[p].color, '--q': String(qi) } as JSX.CSSProperties}>
             <h3>
               <span class="glyph">{PRIORITY_META[p].glyph}</span>
               {PRIORITY_META[p].label}
@@ -279,7 +311,7 @@ function MiniToday({ widget }: { widget: boolean }) {
   if (!items.length)
     return (
       <div class="nx-mini-clear">
-        <Icon name="check" size={26} />
+        <span class="ok"><Icon name="check" size={22} /></span>
         <p>All clear today</p>
         <small>{new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}</small>
       </div>
@@ -293,52 +325,111 @@ function MiniToday({ widget }: { widget: boolean }) {
   );
 }
 
-const UPCOMING_DAYS = 14;
-const dayHead = (iso: string, today: string) =>
-  iso === today
-    ? 'Today'
-    : iso === addDaysIso(today, 1)
-      ? 'Tomorrow'
-      : isoToDate(iso).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' });
+const WEEKDAY_1 = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+const fmtTime = (ms: number) => new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 
-/** The next two weeks, day by day: deadlines, reminders and linked-calendar events. */
-function MiniUpcoming({ widget }: { widget: boolean }) {
+/** A small month with dots (tasks in their priority colour, events in their calendar's) and the chosen day below. */
+function MiniCalendar({ widget }: { widget: boolean }) {
   const today = todayIso();
   const s = settingsSig.value;
-  const days = useMemo(() => {
+  const [sel, setSel] = useState(today);
+  const [ym, setYm] = useState(() => ({ y: new Date().getFullYear(), m: new Date().getMonth() }));
+  const [dir, setDir] = useState(0);
+  const days = useMemo(() => monthGrid(ym.y, ym.m, s.weekStart), [ym.y, ym.m, s.weekStart]);
+  const items = useMemo(() => {
     const linked = s.linkedCalendars.map((c) => ({ calendar: c, events: linkedState.value[c.id]?.events ?? [] }));
-    const map = buildCalendar(allTasks.value, linked, today, addDaysIso(today, UPCOMING_DAYS - 1));
-    const out: { iso: string; items: CalItem[] }[] = [];
-    for (let i = 0; i < UPCOMING_DAYS; i++) {
-      const iso = addDaysIso(today, i);
-      const items = (map.get(iso) ?? []).filter((x) => x.type === 'event' || (!x.task.isCompleted && !x.task.isWontDo));
-      if (items.length) out.push({ iso, items });
+    return buildCalendar(allTasks.value, linked, days[0], days[days.length - 1]);
+  }, [allTasks.value, linkedState.value, s.linkedCalendars, days]);
+  const clashDays = useMemo(() => clashesByDay(clashes.value), [clashes.value]);
+  const clashKeys = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of clashes.value) {
+      m.set(`${c.a.event.uid}|${c.a.start}`, c.b.title);
+      m.set(`${c.b.event.uid}|${c.b.start}`, c.a.title);
     }
-    return out;
-  }, [allTasks.value, linkedState.value, s.linkedCalendars, today]);
-  if (!days.length)
-    return (
-      <div class="nx-mini-clear">
-        <Icon name="event" size={26} />
-        <p>Nothing in the next two weeks</p>
-        <small>Deadlines and reminders show up here</small>
-      </div>
-    );
+    return m;
+  }, [clashes.value]);
+  const shift = (d: number) => {
+    haptic('DRAG_TICK');
+    setDir(d);
+    setYm(({ y, m }) => {
+      const n = new Date(y, m + d, 1);
+      return { y: n.getFullYear(), m: n.getMonth() };
+    });
+  };
+  const weekdays = [...WEEKDAY_1.slice(s.weekStart), ...WEEKDAY_1.slice(0, s.weekStart)];
+  const list = (items.get(sel) ?? []).filter((x) => x.type === 'event' || !x.task.isWontDo);
+  const label = new Date(ym.y, ym.m, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
   return (
-    <div class="nx-mini-list">
-      {days.map((d) => (
-        <section key={d.iso} class="nx-mini-day">
-          <h4>{dayHead(d.iso, today)}</h4>
-          {d.items.map((i) =>
+    <div class="nx-mini-cal">
+      <div class="bar">
+        <b>{label}</b>
+        <span class="grow" />
+        {(sel !== today || ym.m !== new Date().getMonth()) && (
+          <button
+            class="today press"
+            onClick={() => {
+              setDir(0);
+              setYm({ y: new Date().getFullYear(), m: new Date().getMonth() });
+              setSel(today);
+            }}
+          >
+            Today
+          </button>
+        )}
+        <button class="nx-mini-icon" aria-label="Previous month" onClick={() => shift(-1)}>
+          <Icon name="chevronLeft" size={16} />
+        </button>
+        <button class="nx-mini-icon" aria-label="Next month" onClick={() => shift(1)}>
+          <Icon name="chevronRight" size={16} />
+        </button>
+      </div>
+      <div class="wk" aria-hidden="true">
+        {weekdays.map((w, i) => (
+          <span key={i}>{w}</span>
+        ))}
+      </div>
+      <div class={`grid ${dir < 0 ? 'from-left' : dir > 0 ? 'from-right' : ''}`} key={`${ym.y}-${ym.m}`} role="grid" aria-label={label}>
+        {days.map((iso) => {
+          const d = isoToDate(iso);
+          const l = items.get(iso) ?? [];
+          const clash = clashDays.has(iso);
+          return (
+            <button
+              key={iso}
+              role="gridcell"
+              aria-selected={iso === sel}
+              class={`d ${d.getMonth() !== ym.m ? 'other' : ''} ${iso === today ? 'today' : ''} ${iso === sel ? 'sel' : ''}`}
+              onClick={() => {
+                setSel(iso);
+                openTask.value = null;
+              }}
+            >
+              <span class="n">{d.getDate()}</span>
+              {clash && <i class="clash" />}
+              <span class="dots">
+                {l.slice(0, 3).map((x) => (
+                  <i key={x.key} style={{ background: x.type === 'event' ? x.calendar.color : PRIORITY_META[x.task.priority].color }} />
+                ))}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <h4 class="agenda-head">{dayHead(sel, today)}</h4>
+      {list.length === 0 ? (
+        <p class="nothing">Nothing planned</p>
+      ) : (
+        <div class="nx-mini-list" key={sel}>
+          {list.map((i) =>
             i.type === 'event' ? (
-              <div key={i.key} class="nx-mini-row event" style={{ '--c': i.calendar.color } as JSX.CSSProperties}>
+              <div key={i.key} class={`nx-mini-row event ${i.time != null && clashKeys.has(`${i.event.uid}|${i.time}`) ? 'clashing' : ''}`} style={{ '--c': i.calendar.color } as JSX.CSSProperties}>
                 <i class="ev" />
                 <span class="t" title={calendarSourceLabel(i.calendar)}>
                   {i.event.summary || '(No title)'}
+                  {i.time != null && clashKeys.has(`${i.event.uid}|${i.time}`) && <em class="cl">Clashes with {clashKeys.get(`${i.event.uid}|${i.time}`)}</em>}
                 </span>
-                <span class="time">
-                  {i.time != null ? new Date(i.time).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : calendarSourceLabel(i.calendar)}
-                </span>
+                <span class="time">{i.time != null ? fmtTime(i.time) : calendarSourceLabel(i.calendar)}</span>
                 {i.event.meetingUrl && (
                   <a class="join press" href={i.event.meetingUrl} target="_blank" rel="noopener noreferrer" title={i.event.meetingUrl}>
                     Join
@@ -349,35 +440,188 @@ function MiniUpcoming({ widget }: { widget: boolean }) {
               <MiniRow key={i.key} task={i.task} showPriority widget={widget} />
             )
           )}
-        </section>
-      ))}
+        </div>
+      )}
     </div>
   );
 }
 
+const dayHead = (iso: string, today: string) =>
+  iso === today
+    ? 'Today'
+    : iso === addDaysIso(today, 1)
+      ? 'Tomorrow'
+      : isoToDate(iso).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' });
+
 function MiniRow({ task, showPriority, widget = false }: { task: Task; showPriority?: boolean; widget?: boolean }) {
   const meta = PRIORITY_META[task.priority];
   const done = task.isCompleted || task.isWontDo;
-  const time = task.reminderTime != null && dateToIso(new Date(task.reminderTime)) === todayIso() && !task.reminderDateOnly
-    ? new Date(task.reminderTime).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
-    : null;
+  const expanded = openTask.value === task.id;
+  const time = task.reminderTime != null && dateToIso(new Date(task.reminderTime)) === todayIso() && !task.reminderDateOnly ? fmtTime(task.reminderTime) : null;
   return (
-    <div class={`nx-mini-row ${done ? 'done' : ''}`} style={{ '--c': meta.color } as JSX.CSSProperties}>
-      <button
-        class={`cb ${task.isCompleted ? 'on' : ''}`}
-        role="checkbox"
-        aria-checked={task.isCompleted}
-        aria-label={task.isCompleted ? 'Mark not done' : 'Mark done'}
-        onClick={() => void setChecked(task, !task.isCompleted)}
-      >
-        {task.isCompleted && <Icon name="check" size={12} />}
-      </button>
-      <button class="t" title="Open in Nexus" onClick={() => openInFull(task, widget)}>
-        {showPriority && <i class="p" />}
-        {task.description}
-      </button>
-      {time && <span class="time">{time}</span>}
-      <DueBadge task={task} />
+    <div class={`nx-mini-row ${done ? 'done' : ''} ${expanded ? 'open' : ''}`} style={{ '--c': meta.color } as JSX.CSSProperties}>
+      <div class="line">
+        <button
+          class={`cb ${task.isCompleted ? 'on' : ''}`}
+          role="checkbox"
+          aria-checked={task.isCompleted}
+          aria-label={task.isCompleted ? 'Mark not done' : 'Mark done'}
+          onClick={() => {
+            haptic('CHECK');
+            void setChecked(fresh(task), !fresh(task).isCompleted);
+          }}
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M3.5 8.5l3 3 6-7" />
+          </svg>
+        </button>
+        {expanded ? (
+          <>
+            <RenameField task={task} />
+            <button class="close" aria-label="Close" title="Close (Esc)" onClick={() => (openTask.value = null)}>
+              <Icon name="expandMore" size={16} />
+            </button>
+          </>
+        ) : (
+          <>
+            <button class="t" aria-expanded={false} title="Show details" onClick={() => (openTask.value = task.id)}>
+              {showPriority && <i class="p" />}
+              <span>{task.description}</span>
+            </button>
+            {time && <span class="time">{time}</span>}
+            <DueBadge task={task} />
+          </>
+        )}
+      </div>
+      <div class="peek" aria-hidden={!expanded}>
+        <div>{expanded && <TaskPeek task={task} widget={widget} />}</div>
+      </div>
+    </div>
+  );
+}
+
+const DUE_QUICK: [string, (today: string) => string][] = [
+  ['Today', (t) => t],
+  ['Tomorrow', (t) => addDaysIso(t, 1)],
+  ['Next week', (t) => addDaysIso(t, 7)]
+];
+
+/** The open task's title, editable in place: Enter or clicking away saves, Esc undoes. */
+function RenameField({ task }: { task: Task }) {
+  const [title, setTitle] = useState(task.description);
+  const save = (typed: string) => {
+    const v = typed.trim();
+    if (!v || v === task.description) return setTitle(task.description);
+    haptic('CHECK');
+    void updateTask({ ...fresh(task), description: v });
+  };
+  return (
+    <input
+      class="rename"
+      value={title}
+      aria-label="Task title"
+      title="Rename: type, then Enter"
+      onInput={(e) => setTitle(e.currentTarget.value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur();
+        if (e.key === 'Escape') {
+          setTitle(task.description);
+          openTask.value = null;
+        }
+      }}
+      onBlur={(e) => save(e.currentTarget.value)}
+    />
+  );
+}
+
+/** A task opened in place: tick checklist items, move it, set a deadline. */
+function TaskPeek({ task, widget }: { task: Task; widget: boolean }) {
+  const blocks = useMemo(() => fromStorage(task.notes ?? ''), [task.notes]);
+  const hasNotes = blocks.some((b) => b.text.trim());
+  const toggleItem = (id: string) => {
+    haptic('CHECK');
+    const cur = fresh(task);
+    const next = fromStorage(cur.notes ?? '').map((b) => (b.id === id ? { ...b, checked: !b.checked } : b));
+    void updateTask({ ...cur, notes: toStorage(next) });
+  };
+  const setDue = (iso: string) => {
+    haptic('DRAG_TICK');
+    void updateTask({ ...fresh(task), dueDate: iso });
+  };
+  let n = 0;
+  return (
+    <div class="nx-mini-peek">
+      {hasNotes ? (
+        <div class="notes">
+          {blocks.map((b) => {
+            if (!b.text.trim() && b.type !== 'CHECKBOX') return null;
+            n = b.type === 'NUMBERED' ? n + 1 : 0;
+            const pad = { paddingLeft: `${b.indent * 12}px` };
+            if (b.type === 'CHECKBOX')
+              return (
+                <button key={b.id} class={`item ${b.checked ? 'on' : ''}`} style={pad} onClick={() => toggleItem(b.id)}>
+                  <span class="box">{b.checked && <Icon name="check" size={10} />}</span>
+                  <span>{b.text || ' '}</span>
+                </button>
+              );
+            return (
+              <p key={b.id} class={b.type.toLowerCase()} style={pad}>
+                {b.type === 'BULLET' ? '• ' : b.type === 'NUMBERED' ? `${n}. ` : ''}
+                {b.text}
+              </p>
+            );
+          })}
+        </div>
+      ) : (
+        <p class="no-notes">No notes</p>
+      )}
+      <div class="row">
+        <span class="lbl">Move</span>
+        <span class="prios">
+          {PRIORITIES.map((p) => (
+            <button
+              key={p}
+              class={task.priority === p ? 'on' : ''}
+              title={PRIORITY_META[p].label}
+              aria-label={`Move to ${PRIORITY_META[p].label}`}
+              style={{ '--c': PRIORITY_META[p].color } as JSX.CSSProperties}
+              onClick={() => {
+                if (task.priority === p) return;
+                haptic('DRAG_DROP');
+                void moveToPriority(fresh(task), p);
+              }}
+            >
+              {PRIORITY_META[p].glyph}
+            </button>
+          ))}
+        </span>
+      </div>
+      <div class="row">
+        <span class="lbl">Due</span>
+        <span class="chips">
+          {DUE_QUICK.map(([label, f]) => {
+            const iso = f(todayIso());
+            return (
+              <button key={label} class={task.dueDate === iso ? 'on' : ''} onClick={() => setDue(iso)}>
+                {label}
+              </button>
+            );
+          })}
+          {task.dueDate && (
+            <button class="clear" aria-label="Remove the deadline" onClick={() => setDue('')}>
+              <Icon name="close" size={11} />
+            </button>
+          )}
+        </span>
+      </div>
+      <div class="actions">
+        <button class="press" onClick={() => void togglePin(fresh(task))}>
+          <Icon name="pin" size={14} /> {task.isPinned ? 'Unpin' : 'Pin'}
+        </button>
+        <button class="press" onClick={() => openInFull(task, widget)}>
+          <Icon name="edit" size={14} /> Edit notes in Nexus
+        </button>
+      </div>
     </div>
   );
 }

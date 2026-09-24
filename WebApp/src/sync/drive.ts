@@ -104,3 +104,24 @@ export async function uploadBackup(
   const files = await listBackupFiles(token);
   return files[0]?.id ?? created.id;
 }
+
+/** A small JSON file of ours in the Drive app folder (oldest copy wins, like the backup). */
+export async function readAppFile(token: string, name: string): Promise<{ id: string; text: string } | null> {
+  const q = encodeURIComponent(`name = '${name}' and 'appDataFolder' in parents and trashed = false`);
+  const res = await driveFetch(token, `${DRIVE}/files?spaces=appDataFolder&q=${q}&fields=files(id)&orderBy=createdTime`);
+  const files = ((await res.json()) as { files?: { id: string }[] }).files ?? [];
+  if (!files.length) return null;
+  return { id: files[0].id, text: await downloadFileContent(token, files[0].id) };
+}
+
+export async function writeAppFile(token: string, name: string, text: string, existingId: string | null): Promise<void> {
+  const body = new Blob([text], { type: 'application/json' });
+  if (existingId) {
+    await driveFetch(token, `${UPLOAD}/files/${existingId}?uploadType=media`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body });
+    return;
+  }
+  const form = new FormData();
+  form.append('metadata', new Blob([JSON.stringify({ name, parents: ['appDataFolder'] })], { type: 'application/json' }));
+  form.append('file', body);
+  await driveFetch(token, `${UPLOAD}/files?uploadType=multipart&fields=id`, { method: 'POST', body: form });
+}
