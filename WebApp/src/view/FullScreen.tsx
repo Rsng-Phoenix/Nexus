@@ -1,4 +1,5 @@
 import type { JSX } from 'preact';
+import { dueChipLabel, isOverdue } from '../calendar/deadline';
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { haptic } from '../lib/haptics';
 import { formatReminderLabel } from '../reminder-label';
@@ -345,6 +346,7 @@ function SwipeRow({ task, reorder }: { task: Task; reorder?: ReorderHooks }) {
   const st = useRef<{ x: number; y: number; id: number; axis: 'x' | 'y' | null; dx: number; timer: number; reordering: boolean; mouse: boolean } | null>(null);
   const suppressClick = useRef(false);
   const reminder = formatReminderLabel(task.reminderTime, task.reminderDateOnly, task.reminderIntervalMinutes, task.reminderEndDate);
+  const due = done ? null : dueChipLabel(task);
 
   const settle = (to: number, after?: () => void) => {
     const el = card.current!;
@@ -472,7 +474,12 @@ function SwipeRow({ task, reorder }: { task: Task; reorder?: ReorderHooks }) {
         <Checkbox checked={task.isCompleted} color={meta.color} size={34} dim={!task.isCompleted} onChange={(c) => void setChecked(task, c)} />
         <span class="txt">
           <span class="t">{task.description}</span>
-          {reminder && <span class="r"><Icon name="bell" size={10} /> {reminder}</span>}
+          {(reminder || due) && (
+            <span class="r">
+              {due && <span class={`d ${isOverdue(task) ? 'late' : ''}`}><Icon name="calendar" size={10} /> {due}</span>}
+              {reminder && <span><Icon name="bell" size={10} /> {reminder}</span>}
+            </span>
+          )}
         </span>
         {task.isPinned && !done && <Icon name="pin" size={14} color="var(--nx-accent)" />}
         {reorder && <span class="handle" aria-hidden="true"><Icon name="drag" size={16} /></span>}

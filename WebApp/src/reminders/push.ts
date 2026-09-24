@@ -1,10 +1,12 @@
 import { PUSH_WORKER_URL } from '../config';
 import * as db from '../db/tasks';
-import { fromStorage, toPlainText } from '../notes/codec';
 import { getSettings, subscribeSettings } from '../settings/store';
 import { activeTasks, onTasksWritten } from '../state/store';
 import type { Task } from '../types';
-import { PRIORITY_META } from '../types';
+import { upcomingDueFires } from '../calendar/deadline';
+import { linkedState, onLinkedUpdated } from '../calendar/linked';
+import { upcomingMeetings } from '../calendar/meetings';
+import { deliverRing, pendingSnoozes, type MeetInfo, type NotifySettings } from './notify';
 import { upcomingFires } from './schedule';
 
 /**
@@ -23,7 +25,17 @@ export const notificationsSupported = () => typeof Notification !== 'undefined' 
 
 async function device(): Promise<Device | null> {
   const raw = await db.getMeta('push_device');
-  return raw ? (JSON.parse(raw) as Device) : null;
+  try {
+    return raw ? (JSON.parse(raw) as Device) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Authorization for this device's calls to the relay (null until notifications are on). */
+export async function workerAuth(): Promise<Record<string, string> | null> {
+  const d = pushConfigured() ? await device() : null;
+  return d ? authHeader(d) : null;
 }
 
 function authHeader(d: Device) {
@@ -72,18 +84,28 @@ export async function notificationState(): Promise<'on' | 'local' | 'off' | 'blo
   return pushConfigured() && (await device()) ? 'on' : 'local';
 }
 
-type Ring = { ref: string; fireAt: number; kind: 'task' | 'checkin' };
+type Ring = { ref: string; fireAt: number; kind: 'task' | 'due' | 'task-s' | 'due-s' | 'checkin' | 'meet' };
 
-function computeRings(tasks: Task[], now: number): Ring[] {
+export function computeRings(tasks: Task[], now: number): Ring[] {
   const s = getSettings();
   const w = { startHour: s.windowStart, endHour: s.windowEnd };
+  // Paused: nothing is scheduled before the pause ends (and nothing is replayed after it).
+  const from = Math.max(now, s.pauseNotificationsUntil);
+  const horizon = HORIZON_MS - (from - now);
   const rings: Ring[] = [];
-  for (const t of tasks) {
-    if (t.reminderTime == null || t.isCompleted || t.isWontDo || t.archivedAt > 0 || t.deletedAt > 0) continue;
-    for (const at of upcomingFires(t, now, HORIZON_MS, w)) rings.push({ ref: t.taskUuid, fireAt: at, kind: 'task' });
+  if (horizon > 0) {
+    for (const t of tasks) {
+      if (t.isCompleted || t.isWontDo || t.archivedAt > 0 || t.deletedAt > 0) continue;
+      if (s.notifyReminders && t.reminderTime != null) {
+        for (const at of upcomingFires(t, from, horizon, w)) rings.push({ ref: t.taskUuid, fireAt: at, kind: 'task' });
+      }
+      if (s.notifyDeadlines) {
+        for (const f of upcomingDueFires(t, from, horizon)) rings.push({ ref: t.taskUuid, fireAt: f.fireAt, kind: 'due' });
+      }
+    }
   }
   // "You haven't opened Nexus in a while": re-armed every time the app is used.
-  if (s.checkInEnabled) rings.push({ ref: 'checkin', fireAt: now + s.checkInDays * 86_400_000, kind: 'checkin' });
+  if (s.checkInEnabled) rings.push({ ref: 'checkin', fireAt: Math.max(from, now + s.checkInDays * 86_400_000), kind: 'checkin' });
   return rings.sort((a, b) => a.fireAt - b.fireAt).slice(0, 500);
 }
 
@@ -101,82 +123,108 @@ export function scheduleAll(delay = 800): Promise<void> {
   });
 }
 
+let retryTimer = 0;
+const RETRY_MS = 60_000;
+
 async function publish(): Promise<void> {
+  clearTimeout(retryTimer);
   await mirrorSettingsForSw();
-  const rings = computeRings(activeTasks.value, Date.now());
-  armLocal(rings);
+  const now = Date.now();
+  const s = getSettings();
+  const rings = computeRings(activeTasks.value, now);
+  // Snoozed rings (from notification buttons) survive every re-publish until they ring.
+  const paused = s.pauseNotificationsUntil > now;
+  for (const z of await pendingSnoozes(now)) {
+    if (!paused) rings.push({ ref: z.ref, fireAt: z.fireAt, kind: z.kind === 'due' ? 'due-s' : 'task-s' });
+  }
+  // Meeting heads-ups: only titles stay on the device (meet_index); the relay sees an opaque id.
+  const meetings = s.notifyMeetings
+    ? upcomingMeetings(
+        s.linkedCalendars.map((c) => ({ calendar: c, events: linkedState.value[c.id]?.events ?? [] })),
+        s.meetingLeadMinutes,
+        now,
+        Math.max(now, s.pauseNotificationsUntil)
+      )
+    : [];
+  const index: Record<string, MeetInfo> = {};
+  for (const m of meetings) {
+    index[m.ref] = m.info;
+    rings.push({ ref: m.ref, fireAt: m.fireAt, kind: 'meet' });
+  }
+  await db.setMeta('meet_index', JSON.stringify(index));
+  rings.sort((a, b) => a.fireAt - b.fireAt);
+  armLocal(rings, index);
   const d = pushConfigured() ? await device() : null;
   if (!d) return;
   try {
-    await fetch(`${PUSH_WORKER_URL}/reminders`, {
+    const res = await fetch(`${PUSH_WORKER_URL}/reminders`, {
       method: 'PUT',
       headers: authHeader(d),
       body: JSON.stringify({ reminders: rings })
     });
+    if (res.status === 401) {
+      // The relay forgot this device (unsubscribed or expired): register again, silently.
+      await db.setMeta('push_device', '');
+      if (Notification.permission === 'granted') await enableNotifications();
+      return;
+    }
+    if (!res.ok) throw new Error(String(res.status));
   } catch {
-    /* offline: the next change or app open republishes */
+    retryTimer = window.setTimeout(() => void publish(), RETRY_MS); // offline or relay hiccup
   }
 }
 
 /** While Nexus is open, fire due rings locally too (covers "no relay" and offline). */
-function armLocal(rings: Ring[]): void {
+function armLocal(rings: Ring[], meets: Record<string, MeetInfo>): void {
   localTimers.forEach(clearTimeout);
   localTimers = [];
   if (!notificationsSupported() || Notification.permission !== 'granted') return;
   const usePush = pushConfigured();
   const now = Date.now();
   for (const r of rings) {
-    if (r.kind !== 'task') continue;
+    if (r.kind === 'checkin') continue;
+    const kind = r.kind === 'meet' ? 'meet' : r.kind.startsWith('due') ? 'due' : 'task';
+    const snoozed = r.kind.endsWith('-s');
     const delay = r.fireAt - now;
     if (delay < 0 || delay > 24 * 3600_000) continue;
     localTimers.push(
       window.setTimeout(async () => {
-        // With push, the service worker already shows it; only ring locally if the page is visible
-        // and push isn't set up.
+        // With push, the service worker already shows it; only ring locally without push.
         if (usePush && (await device())) return;
         const reg = await navigator.serviceWorker.ready;
         const t = activeTasks.value.find((x) => x.taskUuid === r.ref);
-        if (!t) return;
-        await reg.showNotification(t.description, notificationOptions(t, getSettings().snoozeMinutes));
+        await deliverRing(reg, { kind, ref: r.ref, fireAt: r.fireAt, snoozed }, t, meets[r.ref]);
       }, delay)
     );
   }
 }
 
-export function notificationOptions(t: Task, snoozeMin: number): NotificationOptions & { actions?: unknown[] } {
-  const notes = toPlainText(fromStorage(t.notes)).trim().slice(0, 240);
-  const recurring = t.reminderDateOnly || t.reminderEndDate > 0;
-  return {
-    body: notes || (recurring ? 'Reminder · repeats today' : 'Reminder'),
-    tag: `task:${t.taskUuid}`,
-    icon: './icons/icon-192.png',
-    badge: './icons/badge-72.png',
-    data: { ref: t.taskUuid, kind: 'task' },
-    requireInteraction: t.isPinned,
-    actions: [
-      { action: 'done', title: 'Done' },
-      { action: 'snooze', title: `Snooze ${snoozeMin < 60 ? `${snoozeMin}m` : `${snoozeMin / 60}h`}` }
-    ],
-    // Some browsers show this under the title.
-    ...({ subtitle: `${PRIORITY_META[t.priority].label} priority` } as object)
-  };
-}
-
 /** The service worker can't read localStorage; give it the few settings it needs. */
 async function mirrorSettingsForSw(): Promise<void> {
   const s = getSettings();
-  await db.setMeta(
-    'sw_settings',
-    JSON.stringify({ snoozeMinutes: s.snoozeMinutes, displayName: s.displayName, worker: PUSH_WORKER_URL })
-  );
+  const mirror: NotifySettings = {
+    snoozeMinutes: s.snoozeMinutes,
+    displayName: s.displayName,
+    worker: PUSH_WORKER_URL,
+    notifyReminders: s.notifyReminders,
+    notifyDeadlines: s.notifyDeadlines,
+    notifyMeetings: s.notifyMeetings,
+    groupNotifications: s.groupNotifications,
+    maxNotificationsPerHour: s.maxNotificationsPerHour,
+    pauseNotificationsUntil: s.pauseNotificationsUntil
+  };
+  await db.setMeta('sw_settings', JSON.stringify(mirror));
 }
 
 export function initReminders(): void {
   onTasksWritten(() => void scheduleAll());
+  // New calendar data can move, add or cancel meetings.
+  onLinkedUpdated(() => getSettings().notifyMeetings && void scheduleAll(1500));
   subscribeSettings(() => void scheduleAll(1500));
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') void publish(); // re-arm the check-in on leave
   });
+  window.addEventListener('online', () => void scheduleAll(500));
   void scheduleAll(1200);
 }
 

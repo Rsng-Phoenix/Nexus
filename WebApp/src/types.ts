@@ -24,6 +24,12 @@ export interface Task {
   skippedAt: number;
   /** Archived on Android: hidden from the matrix, kept and synced. 0 = not archived. */
   archivedAt: number;
+  /** Deadline day, ISO YYYY-MM-DD ('' = none). Timezone-free on purpose. */
+  dueDate: string;
+  /** Alert offsets in days relative to dueDate, e.g. "-2,-1,0" ('' = no alerts). */
+  dueAlerts: string;
+  /** Minutes after local midnight the deadline alerts ring (540 = 09:00). */
+  dueAlertTime: number;
 }
 
 export const PRIORITIES: Priority[] = ['HIGH', 'MEDIUM', 'LOW', 'NONE'];

@@ -103,9 +103,10 @@ input, textarea { font: inherit; color: inherit; }
 .nx-check.on .box svg { opacity: 1; transform: scale(1); }
 .nx-check:active .box { transform: scale(0.86); }
 
-.nx-ghost { position: fixed; z-index: 90; left: 0; top: 0; max-width: 180px; pointer-events: none; display: flex; align-items: center; gap: 8px; padding: 8px 12px 8px 0; border-radius: 10px; background: var(--nx-surfaceEl); border: 1px solid var(--c); box-shadow: var(--shadow-float); font-size: 11px; will-change: transform; }
+.nx-ghost { position: fixed; z-index: 90; left: 0; top: 0; max-width: 180px; pointer-events: none; display: flex; align-items: center; gap: 8px; padding: 8px 12px 8px 0; border-radius: 10px; background: var(--nx-surfaceEl); border: 1px solid var(--c); box-shadow: var(--shadow-float); font-size: 11px; will-change: translate, scale; transform-origin: var(--gx, 50%) var(--gy, 50%); }
 .nx-ghost .bar { width: 3px; height: 28px; border-radius: 0 3px 3px 0; background: var(--c); }
 .nx-ghost span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nx-ghost.mouse { max-width: 300px; font-size: 13px; padding: 10px 14px 10px 0; cursor: grabbing; }
 
 /* FAB */
 .nx-fab { position: absolute; z-index: 30; right: 20px; bottom: calc(20px + var(--safe-bottom)); width: 58px; height: 58px; border-radius: 50%; background: var(--nx-accent); color: #fff; display: grid; place-items: center; box-shadow: 0 6px 18px color-mix(in srgb, var(--nx-accent) 45%, transparent); touch-action: none; user-select: none; transition: transform 220ms var(--ease-bouncy), box-shadow 200ms; }

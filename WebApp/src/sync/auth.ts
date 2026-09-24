@@ -1,3 +1,6 @@
+import { getSettings } from '../settings/store';
+import { refreshAccessToken } from './oauth';
+
 /**
  * Must match Android `default_web_client_id` in app/src/main/res/values/strings.xml
  * so both clients share the same Drive appDataFolder for nexus_backup.json.
@@ -22,10 +25,10 @@ export function ensureOAuthClientConsistency(
 }
 
 export const DRIVE_APPDATA_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
-const SCOPE = `${DRIVE_APPDATA_SCOPE} openid email profile`;
+export const SCOPE = `${DRIVE_APPDATA_SCOPE} openid email profile`;
 
 let tokenClient: {
-  requestAccessToken: (o?: { prompt?: string }) => void;
+  requestAccessToken: (o?: { prompt?: string; hint?: string }) => void;
 } | null = null;
 // Token survives reloads for its lifetime (~1h) so opening the app doesn't need a popup.
 // Scope is only drive.appdata (Nexus's own hidden file), never the user's Drive.
@@ -60,7 +63,7 @@ declare global {
             scope: string;
             callback: (r: { access_token?: string; expires_in?: number; error?: string }) => void;
             error_callback?: (e: { type?: string }) => void;
-          }) => { requestAccessToken: (o?: { prompt?: string }) => void };
+          }) => { requestAccessToken: (o?: { prompt?: string; hint?: string }) => void };
         };
       };
     };
@@ -139,6 +142,15 @@ export async function getAccessToken(
     return accessToken;
   }
 
+  // Long session: renew quietly with this device's refresh token (no popup, works in background).
+  if (!force) {
+    const fresh = await refreshAccessToken();
+    if (fresh && fresh !== 'revoked') {
+      setToken(fresh.access_token, fresh.expires_in);
+      return accessToken;
+    }
+  }
+
   if (!interactive) {
     return null;
   }
@@ -151,7 +163,11 @@ export async function getAccessToken(
     pendingTokenResolve?.(null);
     pendingTokenResolve = resolve;
     const prompt = force ? 'consent' : '';
-    tokenClient!.requestAccessToken({ prompt });
+    // Reconnecting the account already in use: name it, so Google's window closes by itself
+    // instead of asking to pick the account again.
+    const s = getSettings();
+    const hint = force ? undefined : s.googleEmail || s.dataOwnerEmail || undefined;
+    tokenClient!.requestAccessToken(hint ? { prompt, hint } : { prompt });
     // Safety net: never leave a sync waiting on a popup the user walked away from.
     setTimeout(() => {
       if (pendingTokenResolve === resolve) {
@@ -160,6 +176,13 @@ export async function getAccessToken(
       }
     }, 120000);
   });
+}
+
+/** Adopt a token obtained elsewhere (the redirect sign-in or a refresh). */
+export function setToken(token: string, expiresInSec: number): void {
+  accessToken = token;
+  tokenExpires = Date.now() + expiresInSec * 1000;
+  persistToken();
 }
 
 export function clearToken(): void {
@@ -194,6 +217,22 @@ export async function hasDriveAppDataAccess(token: string): Promise<boolean> {
     return probe.ok;
   } catch {
     return false;
+  }
+}
+
+const emailCache = new Map<string, string>();
+/** The Google account a token belongs to ('' if unknown / offline). */
+export async function tokenEmail(token: string): Promise<string> {
+  const hit = emailCache.get(token);
+  if (hit !== undefined) return hit;
+  try {
+    const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(token)}`);
+    if (!res.ok) return '';
+    const email = String(((await res.json()) as { email?: string }).email ?? '');
+    emailCache.set(token, email);
+    return email;
+  } catch {
+    return '';
   }
 }
 

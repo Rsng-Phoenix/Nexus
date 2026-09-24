@@ -1,4 +1,5 @@
 import '../styles/tour.css';
+import { isPc } from '../state/viewport';
 import { effect } from '@preact/signals';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { haptic } from '../lib/haptics';
@@ -176,11 +177,17 @@ function copyFor(step: TourStep, target: Priority, retentionDays: number): Copy 
   const label = PRIORITY_META[target].label;
   switch (step) {
     case 'ADD':
-      return {
-        title: 'Add your first task',
-        body: 'Tap + and type something you need to do. You can also drag + straight into a quadrant.',
-        hint: 'Tap +'
-      };
+      return isPc.value
+        ? {
+            title: 'Add your first task',
+            body: 'Press Enter anywhere, pick a priority, and type something you need to do.',
+            hint: 'Press Enter'
+          }
+        : {
+            title: 'Add your first task',
+            body: 'Tap + and type something you need to do. You can also drag + straight into a quadrant.',
+            hint: 'Tap +'
+          };
     case 'DRAG':
       return {
         title: 'Move it between priorities',

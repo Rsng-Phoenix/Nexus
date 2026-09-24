@@ -328,7 +328,7 @@ export function ReminderWizard(p: LayerProps & { taskId: number }) {
 
 // ─── Pieces ────────────────────────────────────────────────────────────────────
 
-function DateHeader({ label, value }: { label: string; value: number }) {
+export function DateHeader({ label, value }: { label: string; value: number }) {
   return (
     <div class="nx-rw-datehead">
       <div class="nx-rw-sub">{label}</div>
@@ -390,7 +390,7 @@ function Chevron({ dir }: { dir: 'left' | 'right' | 'up' | 'down' }) {
 
 // ─── Calendar (Monday-first) ───────────────────────────────────────────────────
 
-function Calendar({ value, onChange, isDisabled, rangeStart }: {
+export function Calendar({ value, onChange, isDisabled, rangeStart }: {
   value: number;
   onChange: (day: number) => void;
   isDisabled: (day: number) => boolean;
@@ -652,7 +652,7 @@ function Spin({ label, value, display, onStep, onType, maxLen }: {
   );
 }
 
-function TimePicker({ hour24, minute, onChange }: {
+export function TimePicker({ hour24, minute, onChange }: {
   hour24: number;
   minute: number;
   onChange: (h: number, m: number) => void;

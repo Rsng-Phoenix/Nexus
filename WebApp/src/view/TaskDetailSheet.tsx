@@ -1,6 +1,8 @@
 import type { JSX } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { haptic } from '../lib/haptics';
+import { dueChipLabel, formatAlertTime, isOverdue } from '../calendar/deadline';
+import { parseDueAlerts } from '../calendar/due';
 import { formatReminderLabel } from '../reminder-label';
 import { settingsSig } from '../settings/store';
 import { isWide } from '../state/viewport';
@@ -11,6 +13,7 @@ import { offerUndo } from '../state/toasts';
 import type { Priority, Task } from '../types';
 import { PRIORITIES, PRIORITY_META } from '../types';
 import { notesToolbar, renderNotesEditor } from '../ui/notes';
+import { addTaskToCalendar } from './addToCalendar';
 import { Icon } from './icons';
 import { Checkbox, Menu, type MenuItem } from './kit';
 import { animate, BOUNCY, EXIT, STANDARD } from './motion';
@@ -36,6 +39,7 @@ export function TaskDetailSheet({ id, taskId, leaving, onExited }: {
   const notesEl = useRef<HTMLDivElement>(null);
   const toolbarEl = useRef<HTMLDivElement>(null);
   const titleEl = useRef<HTMLTextAreaElement>(null);
+  const editorApi = useRef<{ focusEnd: () => void } | null>(null);
   const desktop = isWide.value;
 
   const latest = () => allTasks.value.find((t) => t.id === taskId);
@@ -57,6 +61,7 @@ export function TaskDetailSheet({ id, taskId, leaving, onExited }: {
   useEffect(() => {
     if (!notesEl.current || !toolbarEl.current || !task) return;
     const editor = renderNotesEditor(notesEl.current, task.notes, (s) => (notes.current = s));
+    editorApi.current = editor;
     notesToolbar(
       toolbarEl.current,
       notesEl.current,
@@ -139,6 +144,8 @@ export function TaskDetailSheet({ id, taskId, leaving, onExited }: {
   const meta = PRIORITY_META[priority];
   const done = cur.isCompleted;
   const reminder = formatReminderLabel(cur.reminderTime, cur.reminderDateOnly, cur.reminderIntervalMinutes, cur.reminderEndDate);
+  const due = dueChipLabel(cur);
+  const dueAlertCount = parseDueAlerts(cur.dueAlerts).length;
 
   const closeWithoutSave = () => {
     skipSave.current = true;
@@ -157,6 +164,17 @@ export function TaskDetailSheet({ id, taskId, leaving, onExited }: {
     },
     ...(cur.reminderTime != null
       ? [{ label: 'Clear reminder', icon: 'close' as const, onSelect: () => void clearReminder(cur) }]
+      : []),
+    {
+      label: due ? 'Edit deadline' : 'Add deadline',
+      icon: 'calendar',
+      onSelect: () => {
+        save();
+        nav.open({ kind: 'deadline', taskId });
+      }
+    },
+    ...(due || (cur.reminderTime != null && !cur.reminderDateOnly && !(cur.reminderEndDate > 0))
+      ? [{ label: 'Add to Google / Apple / Outlook calendar', icon: 'event' as const, onSelect: () => void addTaskToCalendar({ ...cur, description: title, notes: notes.current }) }]
       : []),
     { label: 'Share', icon: 'share', onSelect: () => nav.open({ kind: 'share', payload: taskSharePayload({ ...cur, description: title, notes: notes.current }) }) },
     'divider',
@@ -221,7 +239,14 @@ export function TaskDetailSheet({ id, taskId, leaving, onExited }: {
             </button>
           </div>
         </div>
-        <div class="nx-detail-scroll">
+        <div
+          class="nx-detail-scroll"
+          onClick={(e) => {
+            // Empty space under the description still starts typing in it.
+            const t = e.target as HTMLElement;
+            if (t === e.currentTarget || t.classList.contains('nx-detail-divider')) editorApi.current?.focusEnd();
+          }}
+        >
           <div class="nx-detail-title-row">
             <Checkbox checked={done} color={meta.color} size={34} onChange={(c) => void setChecked(cur, c)} />
             <textarea
@@ -238,8 +263,23 @@ export function TaskDetailSheet({ id, taskId, leaving, onExited }: {
               onKeyDown={(e) => e.key === 'Enter' && e.preventDefault()}
             />
           </div>
-          {(reminder || cur.reminderHistoryLabel) && (
+          {(reminder || cur.reminderHistoryLabel || due) && (
             <div class="nx-reminder-chip-row">
+              {due && (
+                <span class={`nx-reminder-chip due ${isOverdue(cur) ? 'late' : ''}`}>
+                  <button
+                    class="press"
+                    title={dueAlertCount ? `${dueAlertCount} alert${dueAlertCount === 1 ? '' : 's'} at ${formatAlertTime(cur.dueAlertTime)}` : 'No alerts'}
+                    onClick={() => { save(); nav.open({ kind: 'deadline', taskId }); }}
+                  >
+                    <Icon name="calendar" size={14} />
+                    {due}
+                  </button>
+                  <button class="x" aria-label="Remove deadline" onClick={() => void updateTask({ ...cur, dueDate: '', dueAlerts: '' })}>
+                    <Icon name="close" size={14} />
+                  </button>
+                </span>
+              )}
               {reminder ? (
                 <span class="nx-reminder-chip">
                   <button class="press" onClick={() => { save(); nav.open({ kind: 'reminder', taskId }); }}>

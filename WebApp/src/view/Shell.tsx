@@ -3,13 +3,34 @@ import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { haptic } from '../lib/haptics';
 import { settingsSig, topBarGreeting } from '../settings/store';
 import * as nav from '../state/nav';
-import { runUndo, snack, syncPill, UNDO_MS, undoToast } from '../state/toasts';
+import { runUndo, showSnack, snack, syncPill, UNDO_MS, undoToast } from '../state/toasts';
 import { onSyncState } from '../sync/manager';
 import type { Priority } from '../types';
 import { Icon } from './icons';
 import { animate, BOUNCY } from './motion';
 import { fabDragging, dropTarget, measureQuadrants, quadrantAt } from './Matrix';
 import { tour } from './tour-state';
+import { isPc, isWide } from '../state/viewport';
+import { closeMiniWindow, miniOpen, miniSupported, openMiniWindow } from './MiniWindow';
+
+/** Computers have no + button: this shows the Enter shortcut and works with a click too. */
+function NewTaskButton() {
+  return (
+    <button
+      class="nx-newtask press"
+      data-tour="fab"
+      onClick={() => {
+        if (!tour.allows('ADD')) return;
+        nav.open({ kind: 'pick' });
+      }}
+      title="New task (Enter)"
+    >
+      <Icon name="add" size={18} />
+      <span>New task</span>
+      <kbd>⏎</kbd>
+    </button>
+  );
+}
 
 export const syncing = signal(false);
 export const syncGlow = signal<'idle' | 'success' | 'error'>('idle');
@@ -31,6 +52,23 @@ export function TopBar({ onBrand }: { onBrand: () => void }) {
         <small>priority matrix</small>
       </div>
       <div class="grow" />
+      <button class="nx-topbtn press" data-tour="calendar" aria-label="Calendar" title="Calendar (C)" onClick={() => nav.open({ kind: 'calendar' })}>
+        <Icon name="calendar" size={20} />
+      </button>
+      {isWide.value && miniSupported() && (
+        <button
+          class={`nx-topbtn press ${miniOpen.value ? 'on' : ''}`}
+          aria-label={miniOpen.value ? 'Close mini window' : 'Open mini window (always on top)'}
+          title="Mini window — stays on top of other apps (M)"
+          onClick={() => {
+            if (miniOpen.value) closeMiniWindow();
+            else void openMiniWindow().then((ok) => !ok && showSnack("This browser couldn't open the mini window. Try Chrome, Edge or Brave."));
+          }}
+        >
+          <Icon name="pip" size={20} />
+        </button>
+      )}
+      {isPc.value && <NewTaskButton />}
       <ProfileChip />
     </header>
   );

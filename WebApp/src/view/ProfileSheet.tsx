@@ -4,7 +4,7 @@ import { patchSettings, profileLastSyncedLabel, sanitizeNickname, settingsSig } 
 import * as nav from '../state/nav';
 import { activeTasks, isDemo } from '../state/store';
 import { showSnack } from '../state/toasts';
-import { countDriveTasks, isSyncing, onSyncState, runSync, signInMessage, signOut } from '../sync/manager';
+import { countDriveTasks, isSyncing, onSyncState, runSync, signInMessage, signOutFlow } from '../sync/manager';
 import type { LayerProps } from './App';
 import { Dialog, GroupDivider, IconButton, Sheet, SettingsGroup, SettingsRow, TextButton } from './kit';
 import { Avatar, syncing } from './Shell';
@@ -26,7 +26,6 @@ export function ProfileSheet(p: LayerProps) {
   const busy = syncing.value || isSyncing();
   const [driveCount, setDriveCount] = useState<number | null | undefined>(undefined);
   const [editing, setEditing] = useState(false);
-  const [confirmOut, setConfirmOut] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
   const [, setTick] = useState(0);
 
@@ -122,8 +121,14 @@ export function ProfileSheet(p: LayerProps) {
                 tint={RED}
                 titleColor={RED}
                 title="Sign out"
-                subtitle="Tasks stay on this device"
-                onClick={() => setConfirmOut(true)}
+                subtitle="Choose whether tasks stay on this device"
+                onClick={() => {
+                  void signOutFlow().then((msg) => {
+                    if (!msg) return;
+                    setDriveCount(undefined);
+                    showSnack(msg);
+                  });
+                }}
               />
             </>
           )}
@@ -134,29 +139,6 @@ export function ProfileSheet(p: LayerProps) {
       {/* Dialogs sit outside the transformed sheet so they centre on the screen. */}
       <NicknameDialog open={editing} current={s.displayName} onClose={() => setEditing(false)} />
 
-      <Dialog
-        open={confirmOut}
-        onClose={() => setConfirmOut(false)}
-        title="Sign out?"
-        actions={
-          <>
-            <TextButton color="var(--nx-textSec)" onClick={() => setConfirmOut(false)}>Cancel</TextButton>
-            <TextButton
-              color={RED}
-              onClick={() => {
-                setConfirmOut(false);
-                signOut();
-                setDriveCount(undefined);
-                showSnack('Signed out');
-              }}
-            >
-              Sign out
-            </TextButton>
-          </>
-        }
-      >
-        Your tasks stay on this device.
-      </Dialog>
     </>
   );
 }

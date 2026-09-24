@@ -29,9 +29,41 @@ export interface Settings {
   windowEnd: number;
   /** How long Recently deleted shows a task (sync keeps tombstones 90 days regardless). */
   trashDays: number;
+  // ── Notifications (same keys and defaults as Android AppSettings) ──
+  notifyReminders: boolean;
+  notifyDeadlines: boolean;
+  /** Offsets (days) pre-selected when adding a deadline, e.g. "-1,0". */
+  defaultDueAlerts: string;
+  /** Minutes after midnight deadline alerts ring by default. */
+  defaultDueAlertTime: number;
+  groupNotifications: boolean;
+  /** Safety cap: rings beyond this in a rolling hour are folded into one summary. */
+  maxNotificationsPerHour: number;
+  /** Nothing rings before this time (0 = not paused). Missed rings are not replayed. */
+  pauseNotificationsUntil: number;
+  /** Google account the tasks on this device belong to ('' = only on this device). */
+  dataOwnerEmail: string;
+  /** Last successful sync with dataOwnerEmail's Drive (kept after sign-out, unlike lastSuccessTime). */
+  ownerSyncedAt: number;
+  /** Private iCal links shown read-only in the calendar. Kept on this device only. */
+  linkedCalendars: LinkedCalendar[];
+  /** 1 = weeks start on Monday, 0 = Sunday. */
+  weekStart: 0 | 1;
+  /** How often linked calendars are re-checked (minutes; one of CALENDAR_REFRESH_CHOICES). */
+  calendarRefreshMinutes: number;
+  /** Heads-up before timed events from linked calendars (off until the user turns it on). */
+  notifyMeetings: boolean;
+  /** How long before a meeting it rings, minutes (0 = when it starts); one of MEETING_LEAD_CHOICES. */
+  meetingLeadMinutes: number;
+  /** Which screen Nexus opens on: the matrix, or the calendar for people who plan by date. */
+  startView: StartView;
   /** Settings schema version, for one-time migrations. */
   schema: number;
 }
+
+export type StartView = 'matrix' | 'calendar';
+
+export type LinkedCalendar = { id: string; name: string; url: string; color: string; enabled: boolean };
 
 // Mirrors Android AppSettings.DEFAULT_* so both apps start out identical.
 export const DEFAULTS = {
@@ -41,8 +73,20 @@ export const DEFAULTS = {
   snoozeMinutes: 10,
   windowStart: 8,
   windowEnd: 22,
-  trashDays: 30
+  trashDays: 30,
+  defaultDueAlerts: '-1,0',
+  defaultDueAlertTime: 540,
+  maxNotificationsPerHour: 12,
+  calendarRefreshMinutes: 15
 } as const;
+export const MEETING_LEAD_CHOICES = [0, 1, 5, 10, 15, 30] as const;
+export const meetingLeadLabel = (m: number) => (m === 0 ? 'When it starts' : `${m} min before`);
+export const CALENDAR_REFRESH_CHOICES = [5, 10, 15, 30, 60, 180, 360] as const;
+/** "15 min", "1 hour", "6 hours". */
+export const refreshLabel = (m: number) => (m < 60 ? `${m} min` : m === 60 ? '1 hour' : `${m / 60} hours`);
+const nearestRefresh = (m: number) =>
+  CALENDAR_REFRESH_CHOICES.reduce((best, c) => (Math.abs(c - m) < Math.abs(best - m) ? c : best), DEFAULTS.calendarRefreshMinutes as number);
+export const MAX_PER_HOUR_RANGE = [3, 60] as const;
 export const CHECK_IN_DAYS_RANGE = [1, 14] as const;
 export const SNOOZE_CHOICES = [5, 10, 15, 30, 60] as const;
 export const TRASH_DAYS_RANGE = [7, 90] as const;
@@ -70,7 +114,22 @@ const defaults: Settings = {
   windowStart: DEFAULTS.windowStart,
   windowEnd: DEFAULTS.windowEnd,
   trashDays: DEFAULTS.trashDays,
-  schema: 2
+  notifyReminders: true,
+  notifyDeadlines: true,
+  defaultDueAlerts: DEFAULTS.defaultDueAlerts,
+  defaultDueAlertTime: DEFAULTS.defaultDueAlertTime,
+  groupNotifications: true,
+  maxNotificationsPerHour: DEFAULTS.maxNotificationsPerHour,
+  pauseNotificationsUntil: 0,
+  dataOwnerEmail: '',
+  ownerSyncedAt: 0,
+  linkedCalendars: [],
+  weekStart: 1,
+  calendarRefreshMinutes: DEFAULTS.calendarRefreshMinutes,
+  notifyMeetings: false,
+  meetingLeadMinutes: 10,
+  startView: 'matrix',
+  schema: 4
 };
 
 function loadRaw(): Settings {
@@ -86,6 +145,22 @@ function loadRaw(): Settings {
       s.vibrationStrength = v > 1 ? Math.max(0.1, Math.min(1, v / 100)) : DEFAULTS.vibrationStrength;
       s.schema = 2;
     }
+    if (s.schema < 3) {
+      // 3.7: tasks already on a signed-in device belong to that account.
+      s.dataOwnerEmail = s.googleEmail;
+      s.ownerSyncedAt = s.lastSuccessTime;
+      s.schema = 3;
+    }
+    if (s.schema < 4) {
+      // 3.7: linked calendars are checked in minutes; the old 6-hour default becomes 15 minutes.
+      const hours = Number((parsed as { calendarRefreshHours?: number }).calendarRefreshHours ?? 6);
+      s.calendarRefreshMinutes = hours === 6 ? DEFAULTS.calendarRefreshMinutes : nearestRefresh(hours * 60);
+      delete (s as { calendarRefreshHours?: number }).calendarRefreshHours;
+      s.schema = 4;
+    }
+    s.calendarRefreshMinutes = nearestRefresh(Number(s.calendarRefreshMinutes) || DEFAULTS.calendarRefreshMinutes);
+    if (!MEETING_LEAD_CHOICES.includes(s.meetingLeadMinutes as (typeof MEETING_LEAD_CHOICES)[number])) s.meetingLeadMinutes = 10;
+    if (s.startView !== 'calendar') s.startView = 'matrix';
     return s;
   } catch {
     return { ...defaults };
@@ -105,7 +180,19 @@ export function resetSettings(): void {
     snoozeMinutes: DEFAULTS.snoozeMinutes,
     windowStart: DEFAULTS.windowStart,
     windowEnd: DEFAULTS.windowEnd,
-    trashDays: DEFAULTS.trashDays
+    trashDays: DEFAULTS.trashDays,
+    notifyReminders: true,
+    notifyDeadlines: true,
+    defaultDueAlerts: DEFAULTS.defaultDueAlerts,
+    defaultDueAlertTime: DEFAULTS.defaultDueAlertTime,
+    groupNotifications: true,
+    maxNotificationsPerHour: DEFAULTS.maxNotificationsPerHour,
+    pauseNotificationsUntil: 0,
+    weekStart: 1,
+    calendarRefreshMinutes: DEFAULTS.calendarRefreshMinutes,
+    startView: 'matrix',
+    notifyMeetings: false,
+    meetingLeadMinutes: 10
   });
 }
 

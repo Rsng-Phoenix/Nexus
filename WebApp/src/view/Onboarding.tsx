@@ -2,6 +2,7 @@ import '../styles/tour.css';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { getSettings, patchSettings, sanitizeNickname, settingsSig } from '../settings/store';
 import { signInMessage } from '../sync/manager';
+import { longSessionsAvailable } from '../sync/oauth';
 import type { LayerProps } from './App';
 import { Icon } from './icons';
 import { PrimaryButton, TextButton } from './kit';
@@ -55,6 +56,9 @@ export function Onboarding(p: LayerProps) {
     setBusy(true);
     setError('');
     try {
+      // Sign-in may leave the page for Google; keep the name and don't show this screen again.
+      if (sanitizeNickname(name)) patchSettings({ displayName: sanitizeNickname(name) });
+      if (await longSessionsAvailable()) patchSettings({ profileOnboardingDone: true });
       const msg = await signInMessage();
       const s = getSettings();
       if (!s.googleEmail) setError(msg);

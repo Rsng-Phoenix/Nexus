@@ -1,0 +1,384 @@
+import '../styles/calendar.css';
+import { useEffect, useMemo, useState } from 'preact/hooks';
+import { DUE_OFFSET_CHOICES, formatAlertTime, isoToDate } from '../calendar/deadline';
+import { parseDueAlerts } from '../calendar/due';
+import { columnLetter, isEmptyRow, type Cell } from '../import/cell';
+import { csvRowsToCells, parseCsv } from '../import/csv';
+import { detectDayFirst, detectHeaderRow, suggestDateColumn } from '../import/dates';
+import { buildImportPlan, cellText, type ImportPlan, type ImportPriority } from '../import/plan';
+import { readXlsx } from '../import/xlsx';
+import { haptic } from '../lib/haptics';
+import { getSettings } from '../settings/store';
+import { allTasks, importTasks } from '../state/store';
+import { offerUndo, showSnack } from '../state/toasts';
+import type { Priority } from '../types';
+import { PRIORITIES, PRIORITY_META } from '../types';
+import type { LayerProps } from './App';
+import { Icon } from './icons';
+import { Page, PageHeader, PrimaryButton, Segmented, Switch } from './kit';
+import { TimePicker } from './ReminderWizard';
+
+type Book = { sheets: { name: string; rows: Cell[][]; truncated: boolean }[]; date1904: boolean };
+const STEPS = ['Data', 'Columns', 'Alerts', 'Review'] as const;
+const PREVIEW_ROWS = 6;
+
+/**
+ * Excel / CSV → tasks with deadlines. The file is read on this device only (never uploaded).
+ * Every row with a valid date becomes a task due that day; alerts ring on the chosen days.
+ */
+export function SheetImportPage(p: LayerProps & { file: File }) {
+  const s = getSettings();
+  const [book, setBook] = useState<Book | null>(null);
+  const [loadError, setLoadError] = useState('');
+  const [step, setStep] = useState(0);
+  const [sheetIdx, setSheetIdx] = useState(0);
+  const [hasHeader, setHasHeader] = useState(true);
+  const [headerRow, setHeaderRow] = useState(0);
+  const [titleCols, setTitleCols] = useState<number[]>([]);
+  const [dateCol, setDateCol] = useState(-1);
+  const [notesCols, setNotesCols] = useState<number[]>([]);
+  const [prioMode, setPrioMode] = useState<'fixed' | 'column'>('fixed');
+  const [fixedPrio, setFixedPrio] = useState<Priority>('MEDIUM');
+  const [prioCol, setPrioCol] = useState(-1);
+  const [dayFirst, setDayFirst] = useState(true);
+  const [offsets, setOffsets] = useState<number[]>(parseDueAlerts(s.defaultDueAlerts));
+  const [time, setTime] = useState(s.defaultDueAlertTime);
+  const [plan, setPlan] = useState<ImportPlan | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // Read the file.
+  useEffect(() => {
+    void (async () => {
+      try {
+        if (p.file.size > 25 * 1024 * 1024) throw new Error('That file is over 25 MB. Split it or save only the sheet you need.');
+        if (/\.xls$/i.test(p.file.name)) throw new Error('Old .xls files aren’t supported. In Excel choose File → Save As → Excel Workbook (.xlsx).');
+        if (/\.(csv|tsv|txt)$/i.test(p.file.name) || p.file.type.startsWith('text/')) {
+          const r = parseCsv(await p.file.text());
+          setBook({ sheets: [{ name: '', rows: csvRowsToCells(r.rows), truncated: r.truncated }], date1904: false });
+        } else {
+          const wb = await readXlsx(await p.file.arrayBuffer());
+          const sheets = wb.sheets.filter((x) => !x.hidden && x.rows.some((r) => !isEmptyRow(r)));
+          if (!sheets.length) throw new Error('This workbook has no data.');
+          setBook({ sheets, date1904: wb.date1904 });
+        }
+      } catch (e) {
+        setLoadError(e instanceof Error ? e.message : 'This file could not be read.');
+      }
+    })();
+  }, []);
+
+  const sheet = book?.sheets[sheetIdx];
+  const rows = sheet?.rows ?? [];
+  const hr = hasHeader ? headerRow : -1;
+  const width = useMemo(() => rows.reduce((w, r) => Math.max(w, r.length), 0), [rows]);
+  const text = (c: Cell | undefined) => cellText(c, { date1904: book?.date1904 });
+  const colName = (i: number) => (hr >= 0 && text(rows[hr]?.[i]).trim()) || `Column ${columnLetter(i)}`;
+  const sample = (i: number) => {
+    for (let r = hr + 1; r < Math.min(rows.length, hr + 30); r++) {
+      const t = text(rows[r]?.[i]).trim();
+      if (t) return t;
+    }
+    return '';
+  };
+  const cols = Array.from({ length: Math.min(width, 200) }, (_, i) => i).filter((i) => rows.some((r, ri) => ri > hr && text(r[i]).trim()));
+
+  // Sensible defaults when the sheet (or header choice) changes.
+  useEffect(() => {
+    if (!sheet) return;
+    const h = detectHeaderRow(sheet.rows);
+    setHasHeader(h >= 0);
+    setHeaderRow(Math.max(0, h));
+  }, [sheet]);
+  useEffect(() => {
+    if (!sheet) return;
+    const d = suggestDateColumn(rows, hr);
+    setDateCol(d);
+    const textCol = cols.find((c) => c !== d && isNaN(Number(sample(c))) && sample(c).length > 1);
+    setTitleCols(textCol != null ? [textCol] : []);
+    setNotesCols([]);
+    const pc = cols.find((c) => /priority|urgency|importance/i.test(colName(c)));
+    setPrioMode(pc != null ? 'column' : 'fixed');
+    setPrioCol(pc ?? -1);
+  }, [sheet, hr]);
+  useEffect(() => {
+    if (dateCol < 0) return;
+    const vals = rows.slice(hr + 1).map((r) => text(r[dateCol])).filter(Boolean).slice(0, 500);
+    const df = detectDayFirst(vals);
+    setDayFirst(df === 'ambiguous' ? true : df);
+  }, [dateCol, sheet, hr]);
+  const ambiguous = useMemo(() => {
+    if (dateCol < 0) return false;
+    return detectDayFirst(rows.slice(hr + 1).map((r) => text(r[dateCol])).filter(Boolean).slice(0, 500)) === 'ambiguous';
+  }, [dateCol, sheet, hr]);
+
+  const priority: ImportPriority = prioMode === 'column' && prioCol >= 0 ? { col: prioCol, fallback: fixedPrio } : fixedPrio;
+
+  // Build the plan for the review step.
+  useEffect(() => {
+    if (step !== 3 || !sheet) return;
+    setPlan(null);
+    void buildImportPlan({
+      fileName: p.file.name,
+      sheetName: sheet.name,
+      rows,
+      headerRow: hr,
+      // Left-to-right column order (not tap order), so re-imports give the same ids (as Android).
+      titleCols: [...titleCols].sort((a, b) => a - b),
+      dateCol,
+      notesCols: [...notesCols].sort((a, b) => a - b),
+      priority,
+      offsets,
+      alertTime: time,
+      dayFirst,
+      date1904: book?.date1904,
+      existingUuids: new Set(allTasks.value.filter((t) => t.deletedAt === 0).map((t) => t.taskUuid))
+    }).then(setPlan);
+  }, [step]);
+
+  const canNext = step === 0 ? rows.length > 0 : step === 1 ? titleCols.length > 0 && dateCol >= 0 : true;
+  const toggleIn = (list: number[], v: number) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
+
+  const run = async () => {
+    if (!plan) return;
+    setBusy(true);
+    haptic('CHECK');
+    let r: Awaited<ReturnType<typeof importTasks>>;
+    try {
+      r = await importTasks(
+      plan.items.map((i) => ({
+        taskUuid: i.taskUuid,
+        description: i.description.slice(0, 500),
+        notes: i.notes.slice(0, 5000),
+        priority: i.priority,
+        dueDate: i.dueDate,
+        dueAlerts: i.dueAlerts,
+        dueAlertTime: i.dueAlertTime
+      }))
+    );
+    } catch (e) {
+      setBusy(false);
+      showSnack(`Import failed: ${e instanceof Error ? e.message : 'unknown error'}. Nothing was changed.`, undefined, 5000);
+      return;
+    }
+    p.onDismiss();
+    const parts = [r.added && `${r.added} added`, r.updated && `${r.updated} updated`, r.skipped && `${r.skipped} unchanged`].filter(Boolean);
+    offerUndo(`Imported · ${parts.join(' · ') || 'nothing new'}`, () => void r.undo());
+  };
+
+  const body = (() => {
+    if (loadError) return <p class="err">{loadError}</p>;
+    if (!book || !sheet) return <p class="lead">Reading {p.file.name}…</p>;
+    if (step === 0)
+      return (
+        <>
+          {book.sheets.length > 1 && (
+            <div class="nx-imp-field">
+              <span class="lbl">Sheet</span>
+              <div class="nx-imp-chips">
+                {book.sheets.map((sh, i) => (
+                  <button key={sh.name} class={`nx-imp-chip press ${i === sheetIdx ? 'on' : ''}`} onClick={() => setSheetIdx(i)}>
+                    {sh.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <label class="nx-imp-switch">
+            <span>
+              <b>First row is the header</b>
+              <small>{hasHeader ? `Row ${headerRow + 1} names the columns` : 'Every row is data'}</small>
+            </span>
+            <Switch checked={hasHeader} onChange={setHasHeader} label="First row is the header" />
+          </label>
+          <PreviewTable rows={rows} hr={hr} cols={cols} colName={colName} text={text} />
+          <p class="hint">
+            {rows.length - (hr + 1)} rows{sheet.truncated ? ' (only the first 5,000 are read)' : ''} · the file stays on this device.
+          </p>
+        </>
+      );
+    if (step === 1)
+      return (
+        <>
+          <ColumnPicker label="Task title" hint="Pick one or more — they’re joined with “·”" cols={cols} colName={colName} sample={sample} selected={titleCols} onToggle={(c) => setTitleCols(toggleIn(titleCols, c))} />
+          <ColumnPicker label="Date" hint="Each row is reminded around this date" cols={cols} colName={colName} sample={sample} selected={dateCol >= 0 ? [dateCol] : []} onToggle={(c) => setDateCol(c)} />
+          {ambiguous && (
+            <label class="nx-imp-switch">
+              <span>
+                <b>Dates are day first</b>
+                <small>{dayFirst ? '03/10 means 3 October' : '03/10 means March 10'}</small>
+              </span>
+              <Switch checked={dayFirst} onChange={setDayFirst} label="Dates are day first" />
+            </label>
+          )}
+          <ColumnPicker label="Notes (optional)" hint="Added to the description as “Column: value”" cols={cols.filter((c) => !titleCols.includes(c) && c !== dateCol)} colName={colName} sample={sample} selected={notesCols} onToggle={(c) => setNotesCols(toggleIn(notesCols, c))} />
+          <div class="nx-imp-field">
+            <span class="lbl">Priority</span>
+            <Segmented options={[['fixed', 'Same for all'], ['column', 'From a column']]} value={prioMode} onChange={setPrioMode} />
+            {prioMode === 'fixed' ? (
+              <Segmented options={PRIORITIES.map((x) => [x, PRIORITY_META[x].label] as [Priority, string])} value={fixedPrio} onChange={setFixedPrio} />
+            ) : (
+              <div class="nx-imp-chips">
+                {cols.map((c) => (
+                  <button key={c} class={`nx-imp-chip press ${c === prioCol ? 'on' : ''}`} onClick={() => setPrioCol(c)}>
+                    {colName(c)}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      );
+    if (step === 2)
+      return (
+        <>
+          <div class="nx-imp-field">
+            <span class="lbl">Remind me</span>
+            <div class="nx-imp-chips">
+              {DUE_OFFSET_CHOICES.map((c) => (
+                <button key={c.offset} role="checkbox" aria-checked={offsets.includes(c.offset)} class={`nx-imp-chip press ${offsets.includes(c.offset) ? 'on' : ''}`} onClick={() => setOffsets(toggleIn(offsets, c.offset).sort((a, b) => a - b))}>
+                  {c.label}
+                </button>
+              ))}
+            </div>
+            <p class="hint">
+              Each row gets its own task. When several rows share a date, their alerts arrive together in one notification that lists every task.
+            </p>
+          </div>
+          <div class="nx-imp-field">
+            <span class="lbl">At</span>
+            <TimePicker hour24={Math.floor(time / 60)} minute={time % 60} onChange={(h, m) => setTime(h * 60 + m)} />
+          </div>
+        </>
+      );
+    if (!plan) return <p class="lead">Checking rows…</p>;
+    const updates = plan.items.filter((i) => i.exists).length;
+    return (
+      <>
+        <div class="nx-imp-stats">
+          <div><b>{plan.items.length - updates}</b><span>new tasks</span></div>
+          <div><b>{updates}</b><span>already here · will update</span></div>
+          <div class={plan.invalid.length ? 'warn' : ''}><b>{plan.invalid.length}</b><span>rows skipped</span></div>
+          {plan.duplicates > 0 && <div><b>{plan.duplicates}</b><span>duplicate rows merged</span></div>}
+        </div>
+        <p class="hint">
+          Alerts: {offsets.length ? offsets.map((o) => DUE_OFFSET_CHOICES.find((c) => c.offset === o)?.label ?? `${o} d`).join(', ') : 'none'} at {formatAlertTime(time)}.
+        </p>
+        <ul class="nx-import-list compact">
+          {plan.items.slice(0, 50).map((i) => (
+            <li key={i.taskUuid} style={{ '--c': PRIORITY_META[i.priority].color } as never}>
+              <span class="pdot" />
+              <span class="txt">
+                <b>{i.description}</b>
+                <small>
+                  {isoToDate(i.dueDate).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
+                  {i.exists ? ' · update' : ''}
+                </small>
+              </span>
+            </li>
+          ))}
+          {plan.items.length > 50 && <li class="more">…and {plan.items.length - 50} more</li>}
+        </ul>
+        {plan.invalid.length > 0 && (
+          <details class="nx-imp-invalid">
+            <summary>Skipped rows ({plan.invalid.length})</summary>
+            <ul>
+              {plan.invalid.slice(0, 100).map((r) => (
+                <li key={r.rowIndex}>Row {r.rowIndex + 1}: {r.reason}</li>
+              ))}
+            </ul>
+          </details>
+        )}
+      </>
+    );
+  })();
+
+  return (
+    <Page leaving={p.leaving} onExited={p.onExited} onDismiss={p.onDismiss} class="nx-imp">
+      <PageHeader title="Import from a sheet" subtitle={p.file.name} onBack={() => (step > 0 ? setStep(step - 1) : p.onDismiss())} />
+      <div class="nx-imp-steps" role="list">
+        {STEPS.map((label, i) => (
+          <span key={label} role="listitem" class={i === step ? 'on' : i < step ? 'done' : ''}>
+            <i>{i < step ? <Icon name="check" size={12} /> : i + 1}</i>
+            {label}
+          </span>
+        ))}
+      </div>
+      <div class="nx-page-scroll narrow nx-imp-body">{body}</div>
+      {!loadError && book && (
+        <div class="nx-imp-actions">
+          <button class="nx-text-btn press" onClick={() => (step > 0 ? setStep(step - 1) : p.onDismiss())}>
+            {step > 0 ? 'Back' : 'Cancel'}
+          </button>
+          <span class="grow" />
+          {step < 3 ? (
+            <PrimaryButton onClick={() => setStep(step + 1)} disabled={!canNext}>
+              Next
+            </PrimaryButton>
+          ) : (
+            <PrimaryButton icon="download" onClick={() => void run()} disabled={busy || !plan || plan.items.length === 0}>
+              {busy ? 'Importing…' : `Import ${plan?.items.length ?? ''} tasks`}
+            </PrimaryButton>
+          )}
+        </div>
+      )}
+    </Page>
+  );
+}
+
+function PreviewTable({ rows, hr, cols, colName, text }: {
+  rows: Cell[][];
+  hr: number;
+  cols: number[];
+  colName: (i: number) => string;
+  text: (c: Cell | undefined) => string;
+}) {
+  const shown = cols.slice(0, 12);
+  const body = rows.slice(hr + 1, hr + 1 + PREVIEW_ROWS);
+  return (
+    <div class="nx-imp-table-wrap">
+      <table class="nx-imp-table">
+        <thead>
+          <tr>
+            {shown.map((c) => (
+              <th key={c}>{colName(c)}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {body.map((r, ri) => (
+            <tr key={ri}>
+              {shown.map((c) => (
+                <td key={c}>{text(r[c])}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ColumnPicker({ label, hint, cols, colName, sample, selected, onToggle }: {
+  label: string;
+  hint: string;
+  cols: number[];
+  colName: (i: number) => string;
+  sample: (i: number) => string;
+  selected: number[];
+  onToggle: (c: number) => void;
+}) {
+  return (
+    <div class="nx-imp-field">
+      <span class="lbl">{label}</span>
+      <div class="nx-imp-cols">
+        {cols.map((c) => (
+          <button key={c} class={`nx-imp-col press ${selected.includes(c) ? 'on' : ''}`} aria-pressed={selected.includes(c)} onClick={() => onToggle(c)}>
+            <b>{colName(c)}</b>
+            <small>{sample(c) || '—'}</small>
+          </button>
+        ))}
+      </div>
+      <p class="hint">{hint}</p>
+    </div>
+  );
+}

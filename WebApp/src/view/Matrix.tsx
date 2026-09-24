@@ -6,6 +6,7 @@ import * as nav from '../state/nav';
 import { byPriority, moveToPriority, setChecked } from '../state/store';
 import type { Priority, Task } from '../types';
 import { PRIORITIES, PRIORITY_META } from '../types';
+import { dueChipLabel, dueShortLabel, isOverdue } from '../calendar/deadline';
 import { Icon } from './icons';
 import { Checkbox, CountBadge } from './kit';
 import { flip, measure } from './motion';
@@ -103,9 +104,19 @@ function TaskRow({ task }: { task: Task }) {
         onChange={(c) => void setChecked(task, c)}
       />
       <span class="title">{task.description}</span>
+      <DueBadge task={task} />
       {task.isPinned && !done && <Icon name="pin" size={10} class="pin" />}
     </div>
   );
+}
+
+/** Small deadline badge on a row (red when late, accent when due today). */
+export function DueBadge({ task }: { task: Task }) {
+  const label = dueShortLabel(task);
+  if (!label || task.isCompleted || task.isWontDo) return null;
+  const late = isOverdue(task);
+  const today = label === 'Today';
+  return <span class={`nx-due-badge ${late ? 'late' : today ? 'today' : ''}`} title={dueChipLabel(task) ?? undefined}>{label}</span>;
 }
 
 // ─── Cross-quadrant drag (long-press on touch, press-and-move with a mouse) ─────
@@ -138,14 +149,24 @@ function useTaskDrag(task: Task) {
     draggingId.value = task.id;
     dropTarget.value = task.priority;
     const ghost = document.createElement('div');
-    ghost.className = 'nx-ghost';
+    ghost.className = s.mouse ? 'nx-ghost mouse' : 'nx-ghost';
     ghost.style.setProperty('--c', PRIORITY_META[task.priority].color);
     ghost.innerHTML = `<span class="bar"></span><span></span>`;
     (ghost.lastChild as HTMLElement).textContent = task.description;
     document.getElementById('app')!.appendChild(ghost);
     s.ghost = ghost;
+    if (s.mouse) {
+      // The ghost is much narrower than a desktop row: keep the grab point inside it so the
+      // card stays under the cursor wherever the row was picked up.
+      const g = ghost.getBoundingClientRect();
+      s.grabX = Math.min(Math.max(s.grabX, 18), g.width - 18);
+      s.grabY = Math.min(Math.max(s.grabY, 8), g.height - 8);
+    }
+    // Zoom in around the grab point.
+    ghost.style.setProperty('--gx', `${s.grabX}px`);
+    ghost.style.setProperty('--gy', `${s.grabY}px`);
     place(s.x, s.y);
-    // Animate `scale`, not `transform`, so the ghost keeps following the pointer meanwhile.
+    // Animate `scale` (not `transform`) so the ghost keeps following the pointer meanwhile.
     ghost.animate([{ scale: '0.9', opacity: 0.4 }, { scale: '1', opacity: 1 }], {
       duration: 160,
       easing: 'cubic-bezier(0.34,1.56,0.64,1)'
@@ -155,7 +176,9 @@ function useTaskDrag(task: Task) {
   const place = (x: number, y: number) => {
     const s = st.current;
     if (!s?.ghost) return;
-    s.ghost.style.transform = `translate(${x - s.grabX}px, ${y - s.grabY}px)`;
+    // The `translate` property is applied outside `scale`, so the pick-up zoom never shifts
+    // the ghost away from the pointer (a scaled `transform: translate` would).
+    s.ghost.style.translate = `${x - s.grabX}px ${y - s.grabY}px`;
   };
 
   const end = (commit: boolean) => {

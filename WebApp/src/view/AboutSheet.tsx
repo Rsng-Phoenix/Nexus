@@ -7,7 +7,7 @@ import { Icon } from './icons';
 import { Sheet, TextButton } from './kit';
 import { animate, BOUNCY, STANDARD, useEnterExit } from './motion';
 
-const APP_VERSION = '3.6';
+import { APP_VERSION } from '../config';
 const APP_YEAR = '2025 - 2026';
 const DEVELOPER = 'Priyanshu Pradhan';
 const EMAIL = 'priyanshupradhan0204@gmail.com';
@@ -193,6 +193,22 @@ function UpdateChecker() {
 
 /** Copied from MainActivity.kt ChangelogDialog (emoji stripped). */
 const ANDROID_CHANGES = [
+  'Deadlines: pick a due day and get alerts days before, on the day or after',
+  'A calendar with your deadlines, reminders and linked Google / iCloud / Zoho / Outlook calendars',
+  'Every calendar item says where it is from (Nexus, Google, iCloud, Zoho, Outlook); tap a calendar in the legend to hide it',
+  'Linked calendars are checked every 15 minutes (you choose) and whenever you open Nexus',
+  'Optional heads-up before meetings from your linked calendars, with a Join button',
+  'Join button for Google Meet, Zoom and Teams links in your calendar',
+  'Add any task with a deadline to Google, Apple or Outlook Calendar in one tap',
+  'Choose whether Nexus opens on the Matrix or the Calendar',
+  'Settings reorganised into clear categories',
+  'Nexus Desk for Mac and Windows: a floating Nexus window with a hot corner, installed with one command',
+  'Import deadlines from Excel or CSV — every dated row becomes a task, with alerts you choose',
+  'Import and export calendar (.ics) files',
+  'Home-screen widgets: Matrix, Today, Quick add, Next up and a single quadrant',
+  'Full notification control: pause, per-type switches, grouping and an hourly safety limit',
+  'Switching Google accounts asks what to do with the tasks on this device',
+  'Multi-line descriptions and tap anywhere in a description to type',
   '"Delete all" in a quadrant now only touches that quadrant — with Undo',
   'Recently deleted: restore anything you deleted (you choose how long it is kept)',
   'You set the numbers: check-in delay, snooze length, reminder hours, trash retention',
@@ -211,6 +227,11 @@ const ANDROID_CHANGES = [
 ];
 
 const WEB_CHANGES = [
+  'Stays signed in to Google Drive (no more hourly sign-in)',
+  'Mini window that stays on top of every app (Chrome, Edge, Brave)',
+  'On a computer: press Enter anywhere for a new task',
+  'Windows 11 widgets (install from Edge) and Dock / taskbar shortcuts',
+  'Dragging a task keeps it right under your pointer',
   'Rebuilt to match the Android app, with the same gestures and settings',
   'Two-way Google Drive sync that actually saves your edits',
   'Install it from your browser for its own window and icon'

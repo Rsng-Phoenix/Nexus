@@ -1,10 +1,14 @@
 import { showDriveScopePrompt } from '../ui/drive-scope-prompt';
+import { getSettings } from '../settings/store';
 import {
   clearToken,
   fetchGoogleProfile,
   getAccessToken,
-  hasDriveAppDataAccess
+  GOOGLE_CLIENT_ID,
+  hasDriveAppDataAccess,
+  SCOPE
 } from './auth';
+import { hasRefreshToken, longSessionsAvailable, startRedirectSignIn } from './oauth';
 
 export type SignInResult =
   | { ok: true; email: string }
@@ -17,6 +21,8 @@ const NO_SCOPE_MSG =
  * Sign in with Google and ensure Drive app-data scope (retry consent once if missing).
  */
 export async function signInWithDriveScope(): Promise<SignInResult> {
+  // Stay-signed-in flow: full-page redirect to Google (works in installed apps and on iPhone).
+  if (await longSessionsAvailable()) await startRedirectSignIn(GOOGLE_CLIENT_ID, SCOPE);
   for (let attempt = 0; attempt < 2; attempt++) {
     clearToken();
     const token = await getAccessToken(true);
@@ -45,6 +51,14 @@ export async function signInWithDriveScope(): Promise<SignInResult> {
 
 /** Returns a token with Drive scope, or null if user declines re-auth. */
 export async function ensureDriveToken(): Promise<string | null> {
+  if (await longSessionsAvailable()) {
+    const quiet = await getAccessToken({ interactive: false });
+    if (quiet && (await hasDriveAppDataAccess(quiet))) return quiet;
+    // Still holding a refresh token = a temporary problem (offline, Google or the relay down):
+    // don't leave the page. Only a revoked / missing token needs Google's sign-in again.
+    if ((await hasRefreshToken()) || !navigator.onLine) return null;
+    await startRedirectSignIn(GOOGLE_CLIENT_ID, SCOPE, getSettings().googleEmail || undefined);
+  }
   let token = await getAccessToken();
   if (token && (await hasDriveAppDataAccess(token))) return token;
 

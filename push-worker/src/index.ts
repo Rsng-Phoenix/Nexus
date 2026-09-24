@@ -6,7 +6,13 @@
  * reference (the task uuid); the device's service worker looks the task up locally and shows
  * the notification. Task titles, notes and calendar details never reach this server.
  *
- * Secrets (set with `wrangler secret put`): VAPID_PRIVATE_JWK, VAPID_PUBLIC (base64url raw P-256).
+ * It also lets the web app stay signed in to Google Drive: Google only gives browser apps
+ * 1-hour tokens, so the app sends the one-time sign-in code here, the worker adds the OAuth client
+ * secret and returns a refresh token *to the device*. Nothing is stored here; later the device
+ * swaps its refresh token for a fresh 1-hour token through `/oauth/refresh`.
+ *
+ * Secrets (set with `wrangler secret put`): VAPID_PRIVATE_JWK, VAPID_PUBLIC (base64url raw P-256),
+ * GOOGLE_CLIENT_SECRET (optional; without it the app falls back to hourly Google sign-in).
  */
 
 export interface Env {
@@ -15,6 +21,8 @@ export interface Env {
   VAPID_PUBLIC: string;
   VAPID_SUBJECT: string;
   ALLOWED_ORIGINS: string;
+  GOOGLE_CLIENT_ID: string;
+  GOOGLE_CLIENT_SECRET?: string;
 }
 
 type Sub = { endpoint: string; keys: { p256dh: string; auth: string } };
@@ -22,6 +30,11 @@ type ReminderIn = { ref: string; fireAt: number; kind?: string };
 
 const MAX_REMINDERS_PER_DEVICE = 500;
 const MAX_AHEAD_MS = 62 * 24 * 60 * 60 * 1000;
+/** A ring this late (worker or push service was down) is dropped, never delivered in a burst. */
+const MAX_LATE_MS = 12 * 60 * 60 * 1000;
+const ICS_MAX_BYTES = 5 * 1024 * 1024;
+/** Calendar providers whose private iCal links may be fetched for a device (no open proxy). */
+const ICS_HOSTS = [/^calendar\.google\.com$/, /^([a-z0-9-]+\.)*icloud\.com$/, /^calendar\.zoho\.(com|eu|in|com\.au|jp)$/, /^outlook\.(office365|live)\.com$/, /^outlook\.office\.com$/];
 
 // ─── HTTP ──────────────────────────────────────────────────────────────────────
 
@@ -44,6 +57,35 @@ export default {
     const url = new URL(req.url);
     try {
       if (req.method === 'GET' && url.pathname === '/vapid') return json({ publicKey: env.VAPID_PUBLIC }, 200, cors);
+
+      // ── Google sign-in that lasts (code → refresh token, returned to the device only) ──
+      if (url.pathname.startsWith('/oauth/')) {
+        if (!allowed.includes(origin)) return json({ error: 'origin not allowed' }, 403, cors);
+        if (req.method === 'GET' && url.pathname === '/oauth/config') {
+          return json({ enabled: !!env.GOOGLE_CLIENT_SECRET, clientId: env.GOOGLE_CLIENT_ID }, 200, cors);
+        }
+        if (!env.GOOGLE_CLIENT_SECRET) return json({ error: 'not configured' }, 501, cors);
+        if (req.method === 'POST' && url.pathname === '/oauth/token') {
+          const b = (await readJson(req)) as { code?: string; code_verifier?: string; redirect_uri?: string };
+          const redirect = String(b.redirect_uri ?? '');
+          // The redirect must be one of the app's own origins (Google checks the exact URI too).
+          if (!b.code || !b.code_verifier || !allowed.some((o) => redirect === o || redirect.startsWith(`${o}/`))) {
+            return json({ error: 'bad request' }, 400, cors);
+          }
+          return googleToken(env, cors, {
+            grant_type: 'authorization_code',
+            code: String(b.code),
+            code_verifier: String(b.code_verifier),
+            redirect_uri: redirect
+          });
+        }
+        if (req.method === 'POST' && url.pathname === '/oauth/refresh') {
+          const b = (await readJson(req)) as { refresh_token?: string };
+          if (!b.refresh_token || b.refresh_token.length > 2048) return json({ error: 'bad request' }, 400, cors);
+          return googleToken(env, cors, { grant_type: 'refresh_token', refresh_token: String(b.refresh_token) });
+        }
+        return json({ error: 'not found' }, 404, cors);
+      }
 
       if (req.method === 'POST' && url.pathname === '/register') {
         const body = (await readJson(req)) as { subscription?: Sub };
@@ -101,6 +143,68 @@ export default {
         return json({ status: res.status }, 200, cors);
       }
 
+      // Linked calendars: a device's private iCal link, fetched on its behalf (browsers can't,
+      // because calendar providers don't allow cross-origin reads). Allowlisted hosts only; the
+      // link and the calendar are never stored or logged.
+      // A task finished from a notification or widget: forget its future rings.
+      if (req.method === 'POST' && url.pathname === '/cancel') {
+        const body = (await readJson(req)) as { ref?: string };
+        if (typeof body.ref !== 'string' || body.ref.length > 200) return json({ error: 'bad request' }, 400, cors);
+        await env.DB.prepare('DELETE FROM reminders WHERE device_id=? AND ref=?').bind(device, body.ref).run();
+        return json({ ok: true }, 200, cors);
+      }
+
+      // Linked calendars: a device's private iCal link, fetched on its behalf (browsers can't,
+      // because calendar providers don't allow cross-origin reads). The link comes in the POST
+      // body (never in a URL, so it isn't in any request log); allowlisted hosts only, every
+      // redirect hop re-checked; nothing is stored or logged.
+      if (req.method === 'POST' && url.pathname === '/ics') {
+        const body = (await readJson(req)) as { url?: string };
+        let target: URL;
+        try {
+          target = new URL(String(body.url ?? '').replace(/^webcals?:/i, 'https:'));
+        } catch {
+          return json({ error: 'bad url' }, 400, cors);
+        }
+        const okHost = (u: URL) => u.protocol === 'https:' && !u.port && ICS_HOSTS.some((h) => h.test(u.hostname));
+        if (!okHost(target)) return json({ error: 'calendar host not supported' }, 400, cors);
+        let res: Response | null = null;
+        for (let hop = 0; hop < 4; hop++) {
+          res = await fetch(target.toString(), {
+            headers: { Accept: 'text/calendar, text/plain;q=0.8' },
+            redirect: 'manual',
+            signal: AbortSignal.timeout(20_000)
+          }).catch(() => null);
+          if (!res || res.status < 300 || res.status >= 400) break;
+          const loc = res.headers.get('Location');
+          if (!loc) break;
+          const next = new URL(loc, target);
+          if (!okHost(next)) return json({ error: 'redirected off host' }, 502, cors);
+          target = next;
+          res = null;
+        }
+        if (!res || !res.ok || !res.body) return json({ error: 'calendar unreachable', status: res?.status ?? 0 }, 502, cors);
+        const reader = res.body.getReader();
+        const chunks: Uint8Array[] = [];
+        let size = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > ICS_MAX_BYTES) {
+            await reader.cancel();
+            return json({ error: 'calendar too large' }, 413, cors);
+          }
+          chunks.push(value);
+        }
+        const text = new TextDecoder().decode(concat(...chunks));
+        if (!/BEGIN:VCALENDAR/i.test(text.slice(0, 2048))) return json({ error: 'not a calendar' }, 422, cors);
+        return new Response(text, {
+          status: 200,
+          headers: { ...cors, 'Content-Type': 'text/calendar; charset=utf-8', 'Cache-Control': 'no-store' }
+        });
+      }
+
       if (req.method === 'DELETE' && url.pathname === '/device') {
         await env.DB.batch([
           env.DB.prepare('DELETE FROM reminders WHERE device_id=?').bind(device),
@@ -135,6 +239,7 @@ async function deliverDue(env: Env): Promise<void> {
   const gone = new Set<string>();
   await Promise.all(
     rows.map(async (r) => {
+      if (now - r.fire_at > MAX_LATE_MS) return; // stale: forget it silently
       const res = await sendPush(
         env,
         { id: r.device_id, endpoint: r.endpoint, p256dh: r.p256dh, auth: r.auth },
@@ -151,6 +256,31 @@ async function deliverDue(env: Env): Promise<void> {
     stmts.push(env.DB.prepare('DELETE FROM devices WHERE id=?').bind(id));
   }
   await env.DB.batch(stmts);
+}
+
+// ─── Google OAuth token endpoint ───────────────────────────────────────────────
+
+async function googleToken(env: Env, cors: Record<string, string>, params: Record<string, string>): Promise<Response> {
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ ...params, client_id: env.GOOGLE_CLIENT_ID, client_secret: env.GOOGLE_CLIENT_SECRET ?? '' })
+  });
+  const out = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok) {
+    // Only Google's error code goes back (e.g. invalid_grant = the user removed access).
+    return json({ error: typeof out.error === 'string' ? out.error : 'token_error' }, res.status === 400 ? 400 : 502, cors);
+  }
+  return json(
+    {
+      access_token: out.access_token,
+      expires_in: out.expires_in,
+      scope: out.scope,
+      ...(typeof out.refresh_token === 'string' ? { refresh_token: out.refresh_token } : {})
+    },
+    200,
+    { ...cors, 'Cache-Control': 'no-store' }
+  );
 }
 
 // ─── Auth ──────────────────────────────────────────────────────────────────────
