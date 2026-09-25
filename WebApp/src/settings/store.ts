@@ -53,6 +53,8 @@ export interface Settings {
   linkedSheets: LinkedSheet[];
   /** How often linked sheets are re-read (minutes; one of SHEET_REFRESH_CHOICES). */
   sheetRefreshMinutes: number;
+  /** A sheet change that arrives after its alert time (before its day is over) alerts once right away. */
+  sheetLateAlerts: boolean;
   /** 1 = weeks start on Monday, 0 = Sunday. */
   weekStart: 0 | 1;
   /** How often linked calendars are re-checked (minutes; one of CALENDAR_REFRESH_CHOICES). */
@@ -177,6 +179,7 @@ const defaults: Settings = {
   linkedRemoved: [],
   linkedSheets: [],
   sheetRefreshMinutes: 15,
+  sheetLateAlerts: true,
   weekStart: 1,
   calendarRefreshMinutes: DEFAULTS.calendarRefreshMinutes,
   notifyMeetings: false,
@@ -222,6 +225,7 @@ function loadRaw(): Settings {
     if (!Array.isArray(s.ignoredClashes)) s.ignoredClashes = [];
     if (!Array.isArray(s.linkedRemoved)) s.linkedRemoved = [];
     if (!Array.isArray(s.linkedSheets)) s.linkedSheets = [];
+    if (typeof s.sheetLateAlerts !== 'boolean') s.sheetLateAlerts = true;
     if (!SHEET_REFRESH_CHOICES.includes(s.sheetRefreshMinutes as (typeof SHEET_REFRESH_CHOICES)[number])) s.sheetRefreshMinutes = 15;
     if (s.calendarFeed && !(typeof s.calendarFeed.id === 'string' && typeof s.calendarFeed.key === 'string')) s.calendarFeed = null;
     return s;

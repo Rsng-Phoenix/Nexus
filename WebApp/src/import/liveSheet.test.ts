@@ -33,11 +33,14 @@ vi.mock('../state/store', () => ({
     for (const t of tasks) if (ids.includes(t.id)) Object.assign(t, { deletedAt: tick(), updatedAt: clock });
   }
 }));
-let settings = { linkedSheets: [] as unknown[], sheetRefreshMinutes: 15 };
+let settings = { linkedSheets: [] as unknown[], sheetRefreshMinutes: 15, sheetLateAlerts: true, notifyDeadlines: true };
+const snoozes: { ref: string; kind: string; fireAt: number }[] = [];
+vi.mock('../reminders/notify', () => ({ addSnooze: async (z: { ref: string; kind: string; fireAt: number }) => void snoozes.push(z) }));
+vi.mock('../reminders/push', () => ({ scheduleAll: async () => {} }));
 vi.mock('../settings/store', () => ({ getSettings: () => settings, patchSettings: (p: object) => void (settings = { ...settings, ...p }) }));
 
 import { csvRowsToCells } from './csv';
-import { applySheet, fetchSheetRows, parseSheetUrl, sheetCsvUrl, unlinkSheet, upcomingSheetTasks } from './liveSheet';
+import { applySheet, fetchSheetRows, lateAlerts, parseSheetUrl, sheetCsvUrl, unlinkSheet, upcomingSheetTasks } from './liveSheet';
 
 const cells = (rows: string[][]) => csvRowsToCells(rows);
 const link = {
@@ -169,5 +172,49 @@ describe('a linked sheet keeps its tasks up to date', () => {
     await applySheet(link, cells([['Task', 'Due', 'Reason'], ['Future appointment', '2099-01-10', '']]));
     expect(await unlinkSheet(link.id)).toEqual([]);
     expect(byTitle('Future appointment')).toBeDefined();
+  });
+
+  it('a row that arrives after its alert time (its day not over) alerts once right away', async () => {
+    snoozes.length = 0;
+    const d = new Date();
+    const iso = (x: Date) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+    const today = iso(d);
+    const tomorrow = iso(new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1));
+    const nextYear = iso(new Date(d.getFullYear() + 1, d.getMonth(), 1));
+    // Alerts on the day at 00:00 (always passed today): today's row is late, tomorrow's and next year's are not.
+    const early = { ...link, mapping: { ...link.mapping, offsets: [0], alertTime: 0, notesCols: [] } };
+    await applySheet(early, cells([['Task', 'Due'], ['Today shipment', today], ['Tomorrow shipment', tomorrow], ['Later', nextYear]]));
+    expect(snoozes.map((z) => tasks.find((t) => t.taskUuid === z.ref)?.description)).toEqual(['Today shipment']);
+    expect(snoozes[0].kind).toBe('due');
+    // Read again, nothing changed: no second alert.
+    await applySheet(early, cells([['Task', 'Due'], ['Today shipment', today], ['Tomorrow shipment', tomorrow], ['Later', nextYear]]));
+    expect(snoozes).toHaveLength(1);
+  });
+
+  it('no late alert for tasks you finished, or with late alerts switched off', async () => {
+    snoozes.length = 0;
+    const d = new Date();
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const early = { ...link, mapping: { ...link.mapping, offsets: [0], alertTime: 0, notesCols: [2] } };
+    await applySheet(early, cells([['Task', 'Due', 'Reason'], ['Done already', today, 'a']]));
+    snoozes.length = 0;
+    Object.assign(byTitle('Done already')!, { isCompleted: true, updatedAt: tick() });
+    await applySheet(early, cells([['Task', 'Due', 'Reason'], ['Done already', today, 'b changed']]));
+    expect(snoozes).toHaveLength(0);
+    settings = { ...settings, sheetLateAlerts: false };
+    await applySheet(early, cells([['Task', 'Due', 'Reason'], ['Fresh row', today, 'x']]));
+    expect(snoozes).toHaveLength(0);
+    settings = { ...settings, sheetLateAlerts: true };
+  });
+
+  it('lateAlerts: past deadline days and alerts still ahead never ring late', () => {
+    const item = (dueDate: string, dueAlerts: string, dueAlertTime: number) =>
+      ({ taskUuid: dueDate + dueAlerts, description: 'x', notes: '', priority: 'MEDIUM', dueDate, dueAlerts, dueAlertTime, rowIndex: 1, exists: false }) as never;
+    const now = new Date(2026, 8, 25, 12, 0).getTime(); // 25 Sep 2026, noon
+    expect(lateAlerts([item('2026-09-24', '0', 540)], now)).toEqual([]); // yesterday: over
+    expect(lateAlerts([item('2026-09-25', '0', 780)], now)).toEqual([]); // 1 pm today: still ahead
+    expect(lateAlerts([item('2026-09-25', '0', 540)], now)).toHaveLength(1); // 9 am today: missed
+    expect(lateAlerts([item('2026-09-26', '-1,0', 540)], now)).toHaveLength(1); // day-before alert at 9 am today: missed
+    expect(lateAlerts([item('2026-09-27', '-1,0', 540)], now)).toEqual([]); // both ahead
   });
 });

@@ -4,7 +4,7 @@ import { askChoice } from '../state/prompts';
 import { restoreTasks } from '../state/store';
 import { offerUndo, showSnack } from '../state/toasts';
 import { Icon } from './icons';
-import { Stepper } from './kit';
+import { Stepper, Switch } from './kit';
 
 const ago = (at: number) => {
   if (!at) return 'Not read yet';
@@ -65,6 +65,13 @@ export function LinkedSheets() {
           </li>
         ))}
       </ul>
+      <label class="nx-sheets-opt">
+        <span>
+          <b>Late alerts</b>
+          <small>A row that arrives after its alert time, while its day isn’t over, alerts you once right away</small>
+        </span>
+        <Switch label="Late alerts" checked={s.sheetLateAlerts} onChange={(v) => patchSettings({ sheetLateAlerts: v })} />
+      </label>
       <div class="nx-inline">
         <span class="lbl">Read them every</span>
         <Stepper

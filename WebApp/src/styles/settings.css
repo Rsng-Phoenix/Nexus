@@ -151,3 +151,7 @@
 .nx-sheets li button:hover, .nx-sheets li a:hover { background: var(--nx-surface); color: var(--nx-textPri); }
 .nx-sheets li button.danger:hover { color: #ff4060; }
 .nx-sheets li button:disabled { opacity: 0.4; cursor: default; }
+.nx-sheets-opt { display: flex; align-items: center; gap: 12px; padding: 8px 2px; cursor: pointer; }
+.nx-sheets-opt span { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.nx-sheets-opt b { font-size: 14px; color: var(--nx-textPri); }
+.nx-sheets-opt small { font-size: 12px; line-height: 1.4; color: var(--nx-textSec); }

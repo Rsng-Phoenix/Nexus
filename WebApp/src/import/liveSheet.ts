@@ -1,7 +1,9 @@
 import { signal } from '@preact/signals';
 import * as db from '../db/tasks';
 import { getSettings, patchSettings, type LinkedSheet, type SheetMapping } from '../settings/store';
-import { dateToIso } from '../calendar/deadline';
+import { alertAt, dateToIso } from '../calendar/deadline';
+import { parseDueAlerts } from '../calendar/due';
+import { addSnooze } from '../reminders/notify';
 import { deleteTasks, importTasks } from '../state/store';
 import type { Task } from '../types';
 import type { Cell } from './cell';
@@ -119,6 +121,28 @@ export async function planSheet(ref: SheetRef, map: SheetMapping, rows: Cell[][]
 
 export type SheetResult = { added: number; updated: number; removed: number };
 
+/** Late alerts ring this long after the read (so the schedule is published first), one second apart. */
+const LATE_DELAY_MS = 15_000;
+/** At most this many late alerts per read (a first read of a big sheet mustn't flood you). */
+const MAX_LATE = 10;
+
+/**
+ * New or changed rows whose alert time has already passed while their day isn't over yet — e.g.
+ * a shipment for today added at 9:20 when alerts ring at 9:00. Each gets one alert right away,
+ * so a sheet read late (phone asleep, laptop closed) never swallows a reminder. Alerts that are
+ * still ahead ring at their normal time as usual.
+ */
+export function lateAlerts(items: ImportItem[], now: number): { ref: string; fireAt: number }[] {
+  const out: { ref: string; fireAt: number }[] = [];
+  for (const i of items) {
+    if (out.length >= MAX_LATE) break;
+    if (now >= alertAt(i.dueDate, 1, 0)) continue; // the deadline day is over
+    const missed = parseDueAlerts(i.dueAlerts).some((o) => alertAt(i.dueDate, o, i.dueAlertTime) <= now);
+    if (missed) out.push({ ref: i.taskUuid, fireAt: now + LATE_DELAY_MS + out.length * 1000 });
+  }
+  return out;
+}
+
 /** Brings one linked sheet's tasks up to date (see the rules at the top). */
 export async function applySheet(link: Pick<LinkedSheet, 'id' | 'sheetId' | 'gid' | 'mapping'>, rows: Cell[][]): Promise<SheetResult> {
   const all = await db.getAllTasksIncludingDeleted();
@@ -128,6 +152,18 @@ export async function applySheet(link: Pick<LinkedSheet, 'id' | 'sheetId' | 'gid
 
   const changed = plan.items.filter((i) => !byUuid.has(i.taskUuid) || snap.rows[i.taskUuid] !== rowHash(i));
   const r = changed.length ? await importTasks(changed.map(toRow)) : { added: 0, updated: 0 };
+
+  // Rows that arrived after their alert time: one alert now (not for tasks you finished or deleted).
+  const s = getSettings();
+  if (s.sheetLateAlerts && s.notifyDeadlines !== false && changed.length) {
+    const live = changed.filter((i) => {
+      const cur = byUuid.get(i.taskUuid);
+      return !cur || (cur.deletedAt === 0 && !cur.isCompleted && !cur.isWontDo);
+    });
+    const late = lateAlerts(live, Date.now());
+    for (const l of late) await addSnooze({ ref: l.ref, kind: 'due', fireAt: l.fireAt });
+    if (late.length) void import('../reminders/push').then((m) => m.scheduleAll(300));
+  }
 
   const now = new Set(plan.items.map((i) => i.taskUuid));
   const gone = Object.keys(snap.rows)
