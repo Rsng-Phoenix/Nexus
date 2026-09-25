@@ -193,6 +193,7 @@ function UpdateChecker() {
 
 /** Copied from MainActivity.kt ChangelogDialog (emoji stripped). */
 const ANDROID_CHANGES = [
+  "Reliable reminders: one tap in Settings so the phone's battery saver can't stop your reminders",
   'Imported tasks now wait in an Imported folder inside each quadrant; only the ones due today step onto the matrix. Their reminders still ring on time',
   'One version everywhere: web, Nexus Desk and Android are all 4.0',
   'Share, redesigned: chat-ready text, a branded image card, and multi-page PDFs with selectable text in any language',
