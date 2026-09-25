@@ -45,8 +45,10 @@ export interface Settings {
   dataOwnerEmail: string;
   /** Last successful sync with dataOwnerEmail's Drive (kept after sign-out, unlike lastSuccessTime). */
   ownerSyncedAt: number;
-  /** Private iCal links shown read-only in the calendar. Kept on this device only. */
+  /** Private iCal links shown read-only in the calendar. Shared with your other devices through Drive. */
   linkedCalendars: LinkedCalendar[];
+  /** Links removed here (by address), so a sync removes them on your other devices too. */
+  linkedRemoved: LinkedRemoval[];
   /** 1 = weeks start on Monday, 0 = Sunday. */
   weekStart: 0 | 1;
   /** How often linked calendars are re-checked (minutes; one of CALENDAR_REFRESH_CHOICES). */
@@ -74,7 +76,9 @@ export type StartView = 'matrix' | 'calendar';
 /** A live calendar feed. [shared]: this copy came from / was written to Drive (not stored there). */
 export type FeedCreds = { v: 1; id: string; key: string; createdAt: number; notes: boolean; shared?: boolean };
 
-export type LinkedCalendar = { id: string; name: string; url: string; color: string; enabled: boolean };
+/** [updatedAt]: last add/rename/colour/switch, so the newest change wins between devices (0 = older than sync). */
+export type LinkedCalendar = { id: string; name: string; url: string; color: string; enabled: boolean; updatedAt?: number };
+export type LinkedRemoval = { url: string; at: number };
 
 // Mirrors Android AppSettings.DEFAULT_* so both apps start out identical.
 export const DEFAULTS = {
@@ -139,6 +143,7 @@ const defaults: Settings = {
   dataOwnerEmail: '',
   ownerSyncedAt: 0,
   linkedCalendars: [],
+  linkedRemoved: [],
   weekStart: 1,
   calendarRefreshMinutes: DEFAULTS.calendarRefreshMinutes,
   notifyMeetings: false,
@@ -182,6 +187,7 @@ function loadRaw(): Settings {
     if (s.startView !== 'calendar') s.startView = 'matrix';
     if (!CLASH_MIN_CHOICES.includes(s.clashMinMinutes as (typeof CLASH_MIN_CHOICES)[number])) s.clashMinMinutes = 1;
     if (!Array.isArray(s.ignoredClashes)) s.ignoredClashes = [];
+    if (!Array.isArray(s.linkedRemoved)) s.linkedRemoved = [];
     if (s.calendarFeed && !(typeof s.calendarFeed.id === 'string' && typeof s.calendarFeed.key === 'string')) s.calendarFeed = null;
     return s;
   } catch {

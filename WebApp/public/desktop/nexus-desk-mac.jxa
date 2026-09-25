@@ -129,6 +129,8 @@ function makeWindow(title, url, autosave, offsetY) {
 
   const cfg = $.WKWebViewConfiguration.alloc.init;
   cfg.preferences.javaScriptCanOpenWindowsAutomatically = true;
+  // Linked calendars: the page asks, this app fetches (see fetchIcs).
+  cfg.userContentController.addScriptMessageHandlerName(controller, 'nexusIcs');
   const w = $.WKWebView.alloc.initWithFrameConfiguration(p.contentView.bounds, cfg);
   w.autoresizingMask = 2 | 16; // follow the window's width and height
   w.customUserAgent = USER_AGENT;
@@ -158,6 +160,7 @@ function makeCalendarWindow() {
 function closeCalendarWindow() {
   if (!calPanel) return;
   calPanel.orderOut(null);
+  calWeb.configuration.userContentController.removeScriptMessageHandlerForName('nexusIcs');
   calWeb.loadHTMLStringBaseURL('', $());
   calPanel = null;
   calWeb = null;
@@ -407,6 +410,58 @@ function buildMenu() {
   return m;
 }
 
+// ─── Linked calendars (fetched here: native apps aren't bound by browser CORS) ───
+
+// The same calendar hosts the Nexus relay accepts; anything else is refused.
+const ICS_HOSTS = [/^calendar\.google\.com$/, /^([a-z0-9-]+\.)*icloud\.com$/, /^calendar\.zoho\.(com|eu|in|com\.au|jp)$/, /^outlook\.(office365|live)\.com$/, /^outlook\.office\.com$/];
+const ICS_MAX_BYTES = 5 * 1024 * 1024;
+let icsSession = null;
+
+function icsHostOk(nsurl) {
+  if (!nsurl || nsurl.isNil()) return false;
+  const scheme = nsurl.scheme.js;
+  const host = (nsurl.host.js || '').toLowerCase();
+  return scheme === 'https' && (nsurl.port.isNil() || !nsurl.port) && ICS_HOSTS.some((h) => h.test(host));
+}
+
+/** A request from the page ({id, url}); the answer goes back through window.__nxIcsDone. */
+function fetchIcs(message) {
+  const webView = message.webView;
+  const reply = (id, status, text, error) => {
+    if (!webView || webView.isNil()) return;
+    const js = 'window.__nxIcsDone&&window.__nxIcsDone(' + JSON.stringify(id) + ',' + status + ',' + JSON.stringify(text) + ',' + JSON.stringify(error) + ')';
+    webView.evaluateJavaScriptCompletionHandler($(js), () => {}); // a null block crashes JXA
+  };
+  let req;
+  try {
+    req = JSON.parse(ObjC.unwrap(message.body));
+  } catch (e) {
+    return;
+  }
+  const id = Number(req && req.id);
+  const url = $.NSURL.URLWithString($(String((req && req.url) || '').replace(/^webcals?:/i, 'https:')));
+  if (!icsHostOk(url)) return reply(id, 400, '', 'calendar host not supported');
+  if (!icsSession) {
+    const c = $.NSURLSessionConfiguration.ephemeralSessionConfiguration; // nothing cached or kept on disk
+    c.timeoutIntervalForRequest = 20;
+    icsSession = $.NSURLSession.sessionWithConfigurationDelegateDelegateQueue(c, null, $.NSOperationQueue.mainQueue);
+  }
+  const r = $.NSMutableURLRequest.requestWithURL(url);
+  r.setValueForHTTPHeaderField($('text/calendar, text/plain;q=0.8'), $('Accept'));
+  const task = icsSession.dataTaskWithRequestCompletionHandler(r, (data, resp, err) => {
+    if (err && !err.isNil()) return reply(id, 0, '', '');
+    // Redirects are followed by the system; the final address must still be a calendar host.
+    if (!icsHostOk(resp.URL)) return reply(id, 502, '', 'redirected off host');
+    const status = Number(resp.statusCode);
+    if (status !== 200) return reply(id, status, '', 'calendar unreachable');
+    if (data.length > ICS_MAX_BYTES) return reply(id, 413, '', 'calendar too large');
+    const text = ObjC.unwrap($.NSString.alloc.initWithDataEncoding(data, 4)) || '';
+    if (!/BEGIN:VCALENDAR/i.test(text.slice(0, 2048))) return reply(id, 422, '', 'not a calendar');
+    reply(id, 200, text, '');
+  });
+  task.resume;
+}
+
 // ─── Controller (menu actions, timer, web view delegate) ───────────────────
 
 function sizeBy(tag) {
@@ -420,8 +475,12 @@ function sizeBy(tag) {
 ObjC.registerSubclass({
   name: 'NexusDeskController',
   superclass: 'NSObject',
-  protocols: ['NSMenuDelegate', 'WKUIDelegate'],
+  protocols: ['NSMenuDelegate', 'WKUIDelegate'], // + userContentController:didReceiveScriptMessage: (WKScriptMessageHandler isn't visible to JXA by name)
   methods: {
+    'userContentController:didReceiveScriptMessage:': {
+      types: ['void', ['id', 'id']],
+      implementation: (_ucc, message) => fetchIcs(message)
+    },
     'menuNeedsUpdate:': {
       types: ['void', ['id']],
       implementation: function (menu) {
