@@ -34,12 +34,14 @@ export function parseSheetUrl(raw: string): SheetRef | null {
   const s = raw.trim();
   const m = /^https:\/\/docs\.google\.com\/spreadsheets\/d\/([A-Za-z0-9_-]{20,})/.exec(s);
   if (!m) return null;
-  const gid = /[#?&]gid=(\d+)/.exec(s)?.[1] ?? '0';
+  // No tab in the link: the first tab (asking for tab 0 fails for uploaded Excel files, whose tabs
+  // have other numbers).
+  const gid = /[#?&]gid=(\d+)/.exec(s)?.[1] ?? '';
   return { sheetId: m[1], gid };
 }
 
-export const sheetCsvUrl = (r: SheetRef) => `https://docs.google.com/spreadsheets/d/${r.sheetId}/export?format=csv&gid=${r.gid}`;
-export const sheetOpenUrl = (r: SheetRef) => `https://docs.google.com/spreadsheets/d/${r.sheetId}/edit#gid=${r.gid}`;
+export const sheetCsvUrl = (r: SheetRef) => `https://docs.google.com/spreadsheets/d/${r.sheetId}/export?format=csv${r.gid ? `&gid=${r.gid}` : ''}`;
+export const sheetOpenUrl = (r: SheetRef) => `https://docs.google.com/spreadsheets/d/${r.sheetId}/edit${r.gid ? `#gid=${r.gid}` : ''}`;
 export const sheetFileName = (r: SheetRef) => `gsheet:${r.sheetId}`;
 
 export class SheetError extends Error {}
@@ -59,6 +61,7 @@ export async function fetchSheetRows(r: SheetRef): Promise<Cell[][]> {
     );
   }
   if (res.status === 404) throw new SheetError('That sheet was not found. Was it deleted, or is the link incomplete?');
+  if (res.status === 400) throw new SheetError('Google couldn’t export that tab. Open the tab you want in Google Sheets and copy the link again.');
   const type = res.headers.get('content-type') ?? '';
   // A private sheet answers with Google's sign-in page instead of the data.
   if (res.status === 401 || res.status === 403 || type.includes('text/html')) {
@@ -102,6 +105,7 @@ export async function planSheet(ref: SheetRef, map: SheetMapping, rows: Cell[][]
     rows,
     headerRow: map.headerRow,
     titleCols: [...map.titleCols].sort((a, b) => a - b),
+    titleText: map.titleText,
     dateCol: map.dateCol,
     notesCols: [...map.notesCols].sort((a, b) => a - b),
     priority: map.priority,
@@ -199,12 +203,17 @@ export function refreshSheet(id: string): Promise<SheetResult | null> {
 /** Every enabled sheet older than the "check every" interval (or all of them with [force]). */
 export async function refreshSheets(force = false): Promise<void> {
   const s = getSettings();
+  if (!force && s.sheetRefreshMinutes === 0) return; // "Only when I tap Update"
   const due = s.linkedSheets.filter((l) => l.enabled && (force || Date.now() - l.lastSyncAt >= s.sheetRefreshMinutes * MINUTE));
   for (const l of due) await refreshSheet(l.id);
 }
 
 let started = false;
-/** While Nexus is open: on start, when it comes to the front, and a light check every minute. */
+/**
+ * While Nexus is open and in front: on start, when it comes back to the front, and a check every
+ * minute that only reads a sheet once its interval (Settings) has passed. Nothing runs in a
+ * background tab or with the interval set to "Only when I tap Update", so it costs no battery then.
+ */
 export function startSheetAutoRefresh(): void {
   if (started || typeof window === 'undefined') return;
   started = true;

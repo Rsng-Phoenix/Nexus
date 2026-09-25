@@ -88,6 +88,8 @@ export type LinkedRemoval = { url: string; at: number };
 export type SheetMapping = {
   headerRow: number;
   titleCols: number[];
+  /** The same words at the start of every task's title (e.g. "Appointment"); '' = columns only. */
+  titleText?: string;
   dateCol: number;
   notesCols: number[];
   priority: Priority | { col: number; fallback?: Priority };
@@ -105,7 +107,9 @@ export type LinkedSheet = {
   lastSyncAt: number;
   lastError: string;
 };
-export const SHEET_REFRESH_CHOICES = [5, 15, 30, 60, 180] as const;
+/** 0 = only when you tap Update now (no automatic reads at all). */
+export const SHEET_REFRESH_CHOICES = [0, 5, 15, 30, 60, 180] as const;
+export const sheetRefreshLabel = (m: number) => (m === 0 ? 'Only when I tap Update' : refreshLabel(m));
 
 // Mirrors Android AppSettings.DEFAULT_* so both apps start out identical.
 export const DEFAULTS = {

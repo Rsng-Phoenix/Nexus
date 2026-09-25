@@ -36,6 +36,8 @@ export type ImportPlanInput = {
   /** Index of the header row, or -1 when the sheet has none. Data starts on the next row. */
   headerRow: number;
   titleCols: number[];
+  /** Words every title starts with (e.g. "Appointment"), before any title columns. */
+  titleText?: string;
   dateCol: number;
   notesCols?: number[];
   priority: ImportPriority;
@@ -137,8 +139,7 @@ export async function buildImportPlan(input: ImportPlanInput): Promise<ImportPla
   for (let r = Math.max(0, headerRow + 1); r < rows.length; r++) {
     const row = rows[r];
     if (isEmptyRow(row)) continue;
-    const title = titleCols
-      .map((c) => cellText(row[c], dateOpts).trim())
+    const title = [input.titleText?.trim() ?? '', ...titleCols.map((c) => cellText(row[c], dateOpts).trim())]
       .filter((t) => t !== '')
       .join(TITLE_JOINER);
     if (!title) {

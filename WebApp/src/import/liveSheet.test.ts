@@ -36,7 +36,7 @@ let settings = { linkedSheets: [] as unknown[], sheetRefreshMinutes: 15 };
 vi.mock('../settings/store', () => ({ getSettings: () => settings, patchSettings: (p: object) => void (settings = { ...settings, ...p }) }));
 
 import { csvRowsToCells } from './csv';
-import { applySheet, fetchSheetRows, parseSheetUrl } from './liveSheet';
+import { applySheet, fetchSheetRows, parseSheetUrl, sheetCsvUrl } from './liveSheet';
 
 const cells = (rows: string[][]) => csvRowsToCells(rows);
 const link = {
@@ -51,7 +51,14 @@ describe('parseSheetUrl', () => {
   it('reads the sheet and tab from the links Google gives you', () => {
     expect(parseSheetUrl('https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit?usp=sharing')).toEqual({
       sheetId: '1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms',
-      gid: '0'
+      gid: '' // no tab in the link: the first tab (uploaded Excel files have no tab 0)
+    });
+    expect(sheetCsvUrl({ sheetId: 'X'.repeat(33), gid: '' })).toBe(`https://docs.google.com/spreadsheets/d/${'X'.repeat(33)}/export?format=csv`);
+    expect(sheetCsvUrl({ sheetId: 'X'.repeat(33), gid: '7' })).toMatch(/&gid=7$/);
+    // An uploaded Excel file opened in Sheets (rtpof=true) is read the same way.
+    expect(parseSheetUrl('https://docs.google.com/spreadsheets/d/1eauNFUiHzr8Pp2P6BDrjUbh_tTQIOTqz/edit?usp=sharing&ouid=1&rtpof=true&sd=true')).toEqual({
+      sheetId: '1eauNFUiHzr8Pp2P6BDrjUbh_tTQIOTqz',
+      gid: ''
     });
     expect(parseSheetUrl(' https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit#gid=123456 ')?.gid).toBe('123456');
     expect(parseSheetUrl('https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit?gid=42#gid=42')?.gid).toBe('42');

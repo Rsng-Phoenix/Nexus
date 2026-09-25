@@ -9,7 +9,7 @@ import { fetchSheetRows, linkSheet, parseSheetUrl, sheetFileName, type SheetRef 
 import { buildImportPlan, cellText, type ImportPlan, type ImportPriority } from '../import/plan';
 import { readXlsx } from '../import/xlsx';
 import { haptic } from '../lib/haptics';
-import { getSettings } from '../settings/store';
+import { getSettings, sheetRefreshLabel } from '../settings/store';
 import { allTasks, importTasks } from '../state/store';
 import { offerUndo, showSnack } from '../state/toasts';
 import type { Priority } from '../types';
@@ -44,6 +44,7 @@ export function SheetImportPage(p: LayerProps & { file?: File }) {
   const [hasHeader, setHasHeader] = useState(true);
   const [headerRow, setHeaderRow] = useState(0);
   const [titleCols, setTitleCols] = useState<number[]>([]);
+  const [titleText, setTitleText] = useState('');
   const [dateCol, setDateCol] = useState(-1);
   const [notesCols, setNotesCols] = useState<number[]>([]);
   const [prioMode, setPrioMode] = useState<'fixed' | 'column'>('fixed');
@@ -155,6 +156,7 @@ export function SheetImportPage(p: LayerProps & { file?: File }) {
       headerRow: hr,
       // Left-to-right column order (not tap order), so re-imports give the same ids (as Android).
       titleCols: [...titleCols].sort((a, b) => a - b),
+      titleText: titleText.trim(),
       dateCol,
       notesCols: [...notesCols].sort((a, b) => a - b),
       priority,
@@ -166,7 +168,7 @@ export function SheetImportPage(p: LayerProps & { file?: File }) {
     }).then(setPlan);
   }, [step]);
 
-  const canNext = step === 0 ? rows.length > 0 : step === 1 ? titleCols.length > 0 && dateCol >= 0 : true;
+  const canNext = step === 0 ? rows.length > 0 : step === 1 ? (titleCols.length > 0 || titleText.trim() !== '') && dateCol >= 0 : true;
   const toggleIn = (list: number[], v: number) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
 
   const run = async () => {
@@ -178,6 +180,7 @@ export function SheetImportPage(p: LayerProps & { file?: File }) {
         const mapping = {
           headerRow: hr,
           titleCols,
+          titleText: titleText.trim(),
           dateCol,
           notesCols,
           priority,
@@ -276,7 +279,27 @@ export function SheetImportPage(p: LayerProps & { file?: File }) {
     if (step === 1)
       return (
         <>
-          <ColumnPicker label="Task title" hint="Pick one or more — they’re joined with “·”" cols={cols} colName={colName} sample={sample} selected={titleCols} onToggle={(c) => setTitleCols(toggleIn(titleCols, c))} />
+          <div class="nx-imp-field">
+            <span class="lbl">Same title for every row (optional)</span>
+            <input
+              class="nx-input"
+              placeholder="e.g. Appointment"
+              maxLength={80}
+              value={titleText}
+              onInput={(e) => setTitleText(e.currentTarget.value)}
+              aria-label="Same title for every row"
+            />
+            <p class="hint">Every task starts with these words. Leave empty to use columns only; rows on the same day then become one task that lists them all.</p>
+          </div>
+          <ColumnPicker
+            label={titleText.trim() ? 'Add to the title (optional)' : 'Task title'}
+            hint={titleText.trim() ? `Shown after “${titleText.trim()}”, joined with “·”` : 'Pick one or more — they’re joined with “·”'}
+            cols={cols}
+            colName={colName}
+            sample={sample}
+            selected={titleCols}
+            onToggle={(c) => setTitleCols(toggleIn(titleCols, c))}
+          />
           <ColumnPicker label="Date" hint="Each row is reminded around this date" cols={cols} colName={colName} sample={sample} selected={dateCol >= 0 ? [dateCol] : []} onToggle={(c) => setDateCol(c)} />
           {ambiguous && (
             <label class="nx-imp-switch">
@@ -344,7 +367,9 @@ export function SheetImportPage(p: LayerProps & { file?: File }) {
                 <b>Keep updating from this sheet</b>
                 <small>
                   {keepUpdating
-                    ? `New and changed rows update their tasks every ${s.sheetRefreshMinutes} min while Nexus is open; your ticks and edits stay`
+                    ? s.sheetRefreshMinutes === 0
+                      ? 'Updates when you tap Update now in Settings (you chose no automatic reads); your ticks and edits stay'
+                      : `New and changed rows update their tasks every ${sheetRefreshLabel(s.sheetRefreshMinutes)} while Nexus is open; your ticks and edits stay`
                     : 'Import once, like a file'}
                 </small>
               </span>

@@ -1,5 +1,5 @@
 import { refreshSheet, sheetBusy, sheetOpenUrl, unlinkSheet } from '../import/liveSheet';
-import { patchSettings, settingsSig, SHEET_REFRESH_CHOICES, refreshLabel } from '../settings/store';
+import { patchSettings, settingsSig, SHEET_REFRESH_CHOICES, sheetRefreshLabel } from '../settings/store';
 import { askChoice } from '../state/prompts';
 import { showSnack } from '../state/toasts';
 import { Icon } from './icons';
@@ -63,7 +63,7 @@ export function LinkedSheets() {
           value={Math.max(0, SHEET_REFRESH_CHOICES.indexOf(s.sheetRefreshMinutes as (typeof SHEET_REFRESH_CHOICES)[number]))}
           min={0}
           max={SHEET_REFRESH_CHOICES.length - 1}
-          format={(i) => refreshLabel(SHEET_REFRESH_CHOICES[i])}
+          format={(i) => sheetRefreshLabel(SHEET_REFRESH_CHOICES[i])}
           onChange={(i) => patchSettings({ sheetRefreshMinutes: SHEET_REFRESH_CHOICES[i] })}
         />
       </div>
