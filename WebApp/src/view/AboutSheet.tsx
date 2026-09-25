@@ -196,6 +196,7 @@ const ANDROID_CHANGES = [
   'Link a Google Sheet: its rows become tasks and keep updating as the sheet changes',
   'Linked sheets: one title for every row (e.g. "Appointment"), dates like "24th Sep", and battery-friendly updates you control',
   'Scan to set up now brings your linked Google Sheets to the other device too',
+  'Unlinking a sheet can remove its upcoming tasks (past and finished ones stay), with Undo',
   'Sheet import keeps every reason when rows share a title and date',
   'Linked calendars now reach all your devices when you are signed in: add, rename or remove one once and your other devices follow',
   'Show Nexus in Google, Apple or Outlook Calendar: a live link that updates as you add, change or finish tasks',

@@ -1,6 +1,7 @@
 import { signal } from '@preact/signals';
 import * as db from '../db/tasks';
 import { getSettings, patchSettings, type LinkedSheet, type SheetMapping } from '../settings/store';
+import { dateToIso } from '../calendar/deadline';
 import { deleteTasks, importTasks } from '../state/store';
 import type { Task } from '../types';
 import type { Cell } from './cell';
@@ -168,10 +169,25 @@ export async function linkSheet(ref: SheetRef, name: string, mapping: SheetMappi
   return { link, result };
 }
 
-/** Stops updating; the tasks already made stay. */
-export async function unlinkSheet(id: string): Promise<void> {
+/** The sheet's tasks that are still ahead: open (not finished) and due today or later. */
+export async function upcomingSheetTasks(id: string, today = dateToIso(new Date())): Promise<Task[]> {
+  const made = new Set(Object.keys((await loadSnap(id)).rows));
+  if (!made.size) return [];
+  const all = await db.getAllTasksIncludingDeleted();
+  return all.filter((t) => made.has(t.taskUuid) && t.deletedAt === 0 && !t.isCompleted && !t.isWontDo && !!t.dueDate && t.dueDate >= today);
+}
+
+/**
+ * Stops updating from a sheet. With [removeUpcoming], its tasks that are still ahead go to
+ * Recently deleted (and so leave your other devices and calendar apps too); past and finished
+ * ones stay either way. Returns the ids removed, for Undo.
+ */
+export async function unlinkSheet(id: string, removeUpcoming = false): Promise<number[]> {
+  const gone = removeUpcoming ? (await upcomingSheetTasks(id)).map((t) => t.id) : [];
+  if (gone.length) await deleteTasks(gone);
   patchSettings({ linkedSheets: getSettings().linkedSheets.filter((l) => l.id !== id) });
   await db.deleteMeta(SNAP(id));
+  return gone;
 }
 
 const inFlight = new Map<string, Promise<SheetResult | null>>();
