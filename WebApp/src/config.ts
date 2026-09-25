@@ -5,4 +5,5 @@
 export const PUSH_WORKER_URL: string =
   (import.meta.env.DEV && import.meta.env.VITE_PUSH_WORKER_URL) || 'https://nexus-push.priyanshupradhan0204.workers.dev';
 
-export const APP_VERSION = '3.7';
+/** One number for every Nexus: the same as the Android app's versionName (app/build.gradle.kts). */
+export const APP_VERSION = '4.0';

@@ -5,7 +5,9 @@ import { haptic } from '../lib/haptics';
 import { formatReminderLabel } from '../reminder-label';
 import { patchSettings, settingsSig } from '../settings/store';
 import * as nav from '../state/nav';
-import { applyOrder, archiveTasks, byPriority, deleteTasks, purgeExpired, restoreTasks, setChecked, unarchiveTasks } from '../state/store';
+import { applyOrder, archiveTasks, byPriority, deleteTasks, importedByPriority, purgeExpired, restoreTasks, setChecked, today, tomorrow, unarchiveTasks } from '../state/store';
+import { folderGroups } from '../import/folder';
+import { FolderRow } from './Matrix';
 import { offerUndo } from '../state/toasts';
 import type { Priority, Task } from '../types';
 import { PRIORITY_META } from '../types';
@@ -16,13 +18,16 @@ import { tour } from './tour-state';
 import { listShareDoc } from '../share/doc';
 import { sharePayloadFromDoc } from '../share/export';
 
-export function FullScreenQuadrant({ priority, leaving, onExited }: {
+export function FullScreenQuadrant({ priority, folder, leaving, onExited }: {
   priority: Priority;
+  /** The quadrant's Imported folder instead of the quadrant itself. */
+  folder?: boolean;
   leaving: boolean;
   onExited: () => void;
 }) {
   const meta = PRIORITY_META[priority];
-  const all = byPriority.value[priority];
+  const imported = importedByPriority.value[priority];
+  const all = folder ? imported : byPriority.value[priority];
   const open = all.filter((t) => !t.isCompleted && !t.isWontDo);
   const wontDo = all.filter((t) => t.isWontDo);
   const completed = all.filter((t) => t.isCompleted);
@@ -60,7 +65,7 @@ export function FullScreenQuadrant({ priority, leaving, onExited }: {
     offerUndo(`${ids.length} ${label} archived`, () => void unarchiveTasks(ids));
   };
   const share = () => {
-    const title = `${meta.label} priority`;
+    const title = folder ? `Imported · ${meta.label} priority` : `${meta.label} priority`;
     nav.open({ kind: 'share', payload: sharePayloadFromDoc(listShareDoc(title, priority, open)) });
   };
 
@@ -72,7 +77,7 @@ export function FullScreenQuadrant({ priority, leaving, onExited }: {
       <header class="nx-full-head">
         <IconButton icon="back" label="Back" onClick={() => nav.back()} />
         <span class="colorbar" />
-        <h1>{meta.label}</h1>
+        <h1>{folder ? 'Imported' : meta.label}</h1>
         <CountBadge count={open.length} color={meta.color} />
         <span class="grow" />
         <IconButton icon="share" label="Share quadrant" onClick={share} />
@@ -85,8 +90,15 @@ export function FullScreenQuadrant({ priority, leaving, onExited }: {
             <small>Tap + to add a {meta.label.toLowerCase()} priority task</small>
           </div>
         )}
-        <ReorderList tasks={open} scroller={listEl} />
-        {wontDo.length > 0 && (
+        {folder ? (
+          <FolderList tasks={all} />
+        ) : (
+          <>
+            <ReorderList tasks={open} scroller={listEl} />
+            {imported.length > 0 && <div class="nx-fs-folder"><FolderRow priority={priority} tasks={imported} /></div>}
+          </>
+        )}
+        {!folder && wontDo.length > 0 && (
           <Section
             label="WON'T DO"
             color="var(--nx-textSec)"
@@ -96,7 +108,7 @@ export function FullScreenQuadrant({ priority, leaving, onExited }: {
             onRetention={() => setRetentionOpen(true)}
           />
         )}
-        {completed.length > 0 && (
+        {!folder && completed.length > 0 && (
           <Section
             label="COMPLETED"
             color={meta.color}
@@ -109,7 +121,7 @@ export function FullScreenQuadrant({ priority, leaving, onExited }: {
         )}
         <div style={{ height: 96 }} />
       </div>
-      <button
+      {!folder && <button
         class="nx-fab small"
         style={{ background: meta.color, color: 'var(--nx-bg)' }}
         aria-label={`Add ${meta.label} task`}
@@ -119,7 +131,7 @@ export function FullScreenQuadrant({ priority, leaving, onExited }: {
         }}
       >
         <Icon name="add" size={24} />
-      </button>
+      </button>}
 
       <Dialog
         open={!!confirm}
@@ -145,6 +157,32 @@ export function FullScreenQuadrant({ priority, leaving, onExited }: {
       </Dialog>
       <RetentionDialog open={retentionOpen} onClose={() => setRetentionOpen(false)} />
     </div>
+    </>
+  );
+}
+
+/** The Imported folder: grouped by day (Missed, Tomorrow, then each date), no reordering. */
+function FolderList({ tasks }: { tasks: Task[] }) {
+  const groups = folderGroups(tasks, today.value, tomorrow.value);
+  const [shut, setShut] = useState<Record<string, boolean>>({ missed: true, done: true });
+  if (!groups.length) return null;
+  return (
+    <>
+      <p class="nx-folder-note">Imported tasks wait here and move onto the matrix on their day. Their reminders ring either way. Pin one to keep it on the matrix.</p>
+      {groups.map((g) => {
+        const closed = shut[g.key] ?? false;
+        const color = g.tone === 'late' ? '#FF4060' : g.tone === 'next' ? 'var(--c)' : 'var(--nx-textSec)';
+        return (
+          <div key={g.key} class="nx-folder-group">
+            <button class="nx-section nx-folder-head" aria-expanded={!closed} onClick={() => setShut({ ...shut, [g.key]: !closed })}>
+              <span class="chev"><Icon name="expandMore" size={18} color={color} style={{ transform: closed ? 'rotate(-90deg)' : 'none', transition: 'transform 220ms' }} /></span>
+              <span class="lbl" style={{ color }}>{g.label.toUpperCase()}</span>
+              <CountBadge count={g.tasks.length} color={color} />
+            </button>
+            {!closed && g.tasks.map((t) => <SwipeRow key={t.id} task={t} />)}
+          </div>
+        );
+      })}
     </>
   );
 }

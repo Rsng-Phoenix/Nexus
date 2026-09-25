@@ -12,7 +12,7 @@ export type Layer =
   | { kind: 'add'; priority: Priority; locked?: boolean; text?: string; due?: string; notes?: string }
   | { kind: 'pick' }
   | { kind: 'detail'; taskId: number }
-  | { kind: 'full'; priority: Priority }
+  | { kind: 'full'; priority: Priority; folder?: boolean }
   | { kind: 'settings'; cat?: string }
   | { kind: 'vault'; which: 'archived' | 'deleted' }
   | { kind: 'about' }

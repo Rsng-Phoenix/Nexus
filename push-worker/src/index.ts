@@ -34,12 +34,17 @@ export interface Env {
   ALLOWED_ORIGINS: string;
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET?: string;
+  /** Per-IP limit (Workers Rate Limiting binding, free). Optional so the worker runs without it. */
+  LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
 }
 
 type Sub = { endpoint: string; keys: { p256dh: string; auth: string } };
 type ReminderIn = { ref: string; fireAt: number; kind?: string };
 
 const MAX_REMINDERS_PER_DEVICE = 500;
+/** Registered browsers/devices at most (a family's worth many times over), and when they expire. */
+const MAX_DEVICES = 20000;
+const DEVICE_IDLE_MS = 180 * 24 * 60 * 60 * 1000;
 const MAX_AHEAD_MS = 62 * 24 * 60 * 60 * 1000;
 /** A ring this late (worker or push service was down) is dropped, never delivered in a burst. */
 const MAX_LATE_MS = 12 * 60 * 60 * 1000;
@@ -76,6 +81,15 @@ export default {
     if (origin && !allowed.includes(origin)) return json({ error: 'origin not allowed' }, 403, cors);
 
     const url = new URL(req.url);
+    // Nobody else can spend this free relay's daily quota: every call that writes or does work
+    // is limited per IP. Calendar apps reading a feed and "is it collected yet?" polls are not.
+    const cheapRead = (req.method === 'GET' || req.method === 'HEAD') && (url.pathname.startsWith('/feed/') || url.searchParams.has('peek') || url.pathname === '/vapid');
+    if (!cheapRead && env.LIMITER) {
+      const ip = req.headers.get('CF-Connecting-IP') ?? 'unknown';
+      const route = url.pathname.split('/')[1] || 'root';
+      const { success } = await env.LIMITER.limit({ key: `${ip}:${route}` }).catch(() => ({ success: true }));
+      if (!success) return json({ error: 'too many requests, try again in a minute' }, 429, { ...cors, 'Retry-After': '60' });
+    }
     try {
       if (req.method === 'GET' && url.pathname === '/vapid') return json({ publicKey: env.VAPID_PUBLIC }, 200, cors);
 
@@ -124,6 +138,8 @@ export default {
             .bind(sub.endpoint, sub.keys.p256dh, sub.keys.auth, now, auth).run();
           return json({ deviceId: auth }, 200, cors);
         }
+        const count = await env.DB.prepare('SELECT COUNT(*) AS n FROM devices').first<{ n: number }>();
+        if ((count?.n ?? 0) >= MAX_DEVICES) return json({ error: 'busy, try again later' }, 503, cors);
         const id = crypto.randomUUID();
         const secret = b64u(crypto.getRandomValues(new Uint8Array(32)));
         await env.DB.prepare('INSERT INTO devices (id, secret_hash, endpoint, p256dh, auth, created_at, seen_at) VALUES (?,?,?,?,?,?,?)')
@@ -252,6 +268,12 @@ export default {
     // Once a day is plenty for forgotten calendar feeds.
     if (new Date(_evt.scheduledTime).getUTCHours() === 3 && new Date(_evt.scheduledTime).getUTCMinutes() === 0) {
       ctx.waitUntil(ensureFeedTable(env).then(() => env.DB.prepare('DELETE FROM feeds WHERE updated_at < ?').bind(Date.now() - FEED_IDLE_MS).run()).catch(() => {}));
+      // Devices that haven't checked in for months (browser data cleared, app removed).
+      const stale = Date.now() - DEVICE_IDLE_MS;
+      ctx.waitUntil(env.DB.batch([
+        env.DB.prepare('DELETE FROM reminders WHERE device_id IN (SELECT id FROM devices WHERE seen_at < ?)').bind(stale),
+        env.DB.prepare('DELETE FROM devices WHERE seen_at < ?').bind(stale)
+      ]).catch(() => {}));
     }
   }
 };

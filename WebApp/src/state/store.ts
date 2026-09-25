@@ -7,6 +7,8 @@ import { TUTORIAL_UUID_PREFIX } from '../sync/backup';
 import { markCompleted, markWontDo, newTask } from '../task-utils';
 import type { Priority, Task } from '../types';
 import { PRIORITIES } from '../types';
+import { addDaysIso, todayIso } from '../calendar/deadline';
+import { isImported, onMatrix } from '../import/folder';
 
 /** Every row in IndexedDB, tombstones included. The single source of truth for the UI. */
 export const allTasks = signal<Task[]>([]);
@@ -30,11 +32,34 @@ export const activeTasks = computed(() =>
   allTasks.value.filter((t) => t.deletedAt === 0 && !isArchived(t))
 );
 
+/** Local calendar day, re-read each minute and on return to the tab (imports step out at midnight). */
+export const today = signal(todayIso());
+export const tomorrow = computed(() => addDaysIso(today.value, 1));
+if (typeof window !== 'undefined') {
+  const tick = () => {
+    const d = todayIso();
+    if (d !== today.peek()) today.value = d;
+  };
+  window.setInterval(tick, 60_000);
+  document.addEventListener('visibilitychange', tick);
+}
+
+/** The matrix: every task you typed, plus imported ones due today (the rest wait in the Imported folder). */
 export const byPriority = computed(() => {
   const m = {} as Record<Priority, Task[]>;
   for (const p of PRIORITIES) m[p] = [];
-  for (const t of activeTasks.value) m[t.priority].push(t);
+  const day = today.value;
+  for (const t of activeTasks.value) if (onMatrix(t, day)) m[t.priority].push(t);
   for (const p of PRIORITIES) m[p].sort(displayOrder);
+  return m;
+});
+
+/** Each quadrant's Imported folder: imported tasks that aren't on the matrix today. */
+export const importedByPriority = computed(() => {
+  const m = {} as Record<Priority, Task[]>;
+  for (const p of PRIORITIES) m[p] = [];
+  const day = today.value;
+  for (const t of activeTasks.value) if (isImported(t) && !onMatrix(t, day)) m[t.priority].push(t);
   return m;
 });
 

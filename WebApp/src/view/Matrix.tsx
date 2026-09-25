@@ -3,7 +3,8 @@ import type { JSX } from 'preact';
 import { useLayoutEffect, useRef } from 'preact/hooks';
 import { haptic } from '../lib/haptics';
 import * as nav from '../state/nav';
-import { byPriority, moveToPriority, setChecked } from '../state/store';
+import { byPriority, importedByPriority, moveToPriority, setChecked, today } from '../state/store';
+import { folderSummary } from '../import/folder';
 import type { Priority, Task } from '../types';
 import { PRIORITIES, PRIORITY_META } from '../types';
 import { dueChipLabel, dueShortLabel, isOverdue } from '../calendar/deadline';
@@ -44,6 +45,7 @@ export function Matrix() {
 function Quadrant({ priority }: { priority: Priority }) {
   const meta = PRIORITY_META[priority];
   const tasks = byPriority.value[priority];
+  const folder = importedByPriority.value[priority];
   const open = tasks.filter((t) => !t.isCompleted && !t.isWontDo).length;
   const list = useRef<HTMLDivElement>(null);
   const before = useRef<Map<string, DOMRect>>(new Map());
@@ -73,11 +75,12 @@ function Quadrant({ priority }: { priority: Priority }) {
         <CountBadge count={open} color={meta.color} />
       </div>
       <div class="nx-quad-list" ref={list} onClick={(e) => e.target === e.currentTarget && openFull()}>
-        {tasks.length === 0 ? (
+        {tasks.length === 0 && folder.length === 0 ? (
           <div class="nx-quad-empty">{isDrop ? 'Drop here' : 'No tasks'}</div>
         ) : (
           tasks.map((t) => <TaskRow key={t.id} task={t} />)
         )}
+        {folder.length > 0 && <FolderRow priority={priority} tasks={folder} />}
       </div>
     </section>
   );
@@ -107,6 +110,27 @@ function TaskRow({ task }: { task: Task }) {
       <DueBadge task={task} />
       {task.isPinned && !done && <Icon name="pin" size={10} class="pin" />}
     </div>
+  );
+}
+
+/**
+ * Imported tasks that aren't due today wait here, one row per quadrant, so a 300-row sheet
+ * doesn't bury what you typed. Tap to open the folder. Identical on Android.
+ */
+export function FolderRow({ priority, tasks }: { priority: Priority; tasks: Task[] }) {
+  const s = folderSummary(tasks, today.value);
+  const open = () => {
+    if (!tour.allows('EXPAND', priority)) return;
+    haptic('FAB_TAP');
+    nav.open({ kind: 'full', priority, folder: true });
+  };
+  return (
+    <button class="nx-folder-row" onClick={(e) => { e.stopPropagation(); open(); }} aria-label={`Imported: ${s.text}`}>
+      <Icon name="folder" size={16} class="ic" />
+      <span class="title">Imported</span>
+      <span class="sub">{s.text}</span>
+      <Icon name="chevronRight" size={16} class="chev" />
+    </button>
   );
 }
 
