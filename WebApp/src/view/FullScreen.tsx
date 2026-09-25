@@ -13,6 +13,8 @@ import { Icon } from './icons';
 import { Checkbox, CountBadge, Dialog, IconButton, Menu, Slider, TextButton } from './kit';
 import { animate, BOUNCY, ENTER, flip, measure, STANDARD, useEnterExit } from './motion';
 import { tour } from './tour-state';
+import { listShareDoc } from '../share/doc';
+import { sharePayloadFromDoc } from '../share/export';
 
 export function FullScreenQuadrant({ priority, leaving, onExited }: {
   priority: Priority;
@@ -58,13 +60,8 @@ export function FullScreenQuadrant({ priority, leaving, onExited }: {
     offerUndo(`${ids.length} ${label} archived`, () => void unarchiveTasks(ids));
   };
   const share = () => {
-    // Same text as Android ShareHelper.quadrantSharePayload: "○ task" lines.
-    const body = open.map((t) => `○ ${t.description}`).join('\n') || 'No open tasks';
     const title = `${meta.label} priority`;
-    nav.open({
-      kind: 'share',
-      payload: { title, subject: `NEXUS: ${title}`, fullText: `${title}\n${'─'.repeat(16)}\n${body}`, contentBody: body }
-    });
+    nav.open({ kind: 'share', payload: sharePayloadFromDoc(listShareDoc(title, priority, open)) });
   };
 
   return (
