@@ -31,6 +31,9 @@ import { TourOverlay, startTour } from './Tour';
 import { VaultPage } from './VaultPage';
 import { isPc } from '../state/viewport';
 import { tour } from './tour-state';
+import { Palette } from './Palette';
+import { isMac, ShortcutsDialog, shortcutsOpen } from './Shortcuts';
+import { handleMatrixKey, moveFocusedTo } from './keynav';
 
 /** Props every layer component receives. */
 export type LayerProps = {
@@ -74,11 +77,29 @@ export function App() {
       }
     });
     const every15 = window.setInterval(() => void runSync({ background: true }), 15 * 60_000);
-    // Keyboard (any device with one): Enter or N new task, 1–4 open a quadrant, S sync, comma settings.
+    // Keyboard (any device with one): ⌘K palette, Enter or N new task, 1–4 open a quadrant, S sync,
+    // comma settings, ? shortcuts; arrows / hjkl highlight a task (view/keynav.ts). Full list in Shortcuts.tsx.
     const keys = (e: KeyboardEvent) => {
       const t = e.target;
-      if (e.metaKey || e.ctrlKey || e.altKey || nav.top.value || activePrompt.value) return;
+      if (activePrompt.value) return;
+      const top = nav.top.value;
+      // ⌘K / Ctrl+K toggles the palette from the matrix, a quadrant or the calendar (not inside a sheet).
+      if ((isMac ? e.metaKey : e.ctrlKey) && !e.altKey && !e.shiftKey && (e.key === 'k' || e.key === 'K')) {
+        if (top?.kind === 'palette') nav.back();
+        else if (!top || top.kind === 'full' || top.kind === 'calendar') nav.open({ kind: 'palette' });
+        else return;
+        e.preventDefault();
+        return;
+      }
+      if (e.metaKey || e.ctrlKey || top || shortcutsOpen.value) return;
       if (t instanceof Element && t.closest('input, textarea, [contenteditable="true"]')) return;
+      const digit = ({ Digit1: 'HIGH', Digit2: 'MEDIUM', Digit3: 'LOW', Digit4: 'NONE' } as const)[e.code as 'Digit1'];
+      if (e.altKey) {
+        // ⌥1–4 moves the highlighted task (e.code: on a Mac ⌥1 types "¡", so e.key is no use).
+        if (digit && moveFocusedTo(digit)) e.preventDefault();
+        return;
+      }
+      if (handleMatrixKey(e)) return;
       const quad = ({ '1': 'HIGH', '2': 'MEDIUM', '3': 'LOW', '4': 'NONE' } as const)[e.key as '1'];
       const onControl = t instanceof Element && t.closest('button, a, [role="button"], select');
       if ((e.key === 'Enter' && !onControl && !e.repeat) || e.key === 'n' || e.key === 'N') {
@@ -90,6 +111,10 @@ export function App() {
       else if ((e.key === 'm' || e.key === 'M') && miniSupported()) void (miniOpen.value ? closeMiniWindow() : openMiniWindow());
       else if (e.key === 's' && getSettings().googleEmail) void runSync();
       else if (e.key === ',') nav.open({ kind: 'settings' });
+      else if (e.key === '/') {
+        e.preventDefault();
+        nav.open({ kind: 'palette' });
+      } else if (e.key === '?') shortcutsOpen.value = true;
     };
     window.addEventListener('keydown', keys);
     return () => {
@@ -109,6 +134,7 @@ export function App() {
       <Toasts />
       <TourOverlay />
       <PromptHost />
+      <ShortcutsDialog />
     </div>
   );
 }
@@ -179,6 +205,8 @@ function LayerView({ entry, leaving }: { entry: LayerEntry; leaving: boolean }) 
       return <IcsImportSheet {...p} fileName={entry.fileName} text={entry.text} />;
     case 'sheetImport':
       return <SheetImportPage {...p} file={entry.file} />;
+    case 'palette':
+      return <Palette {...p} />;
     default:
       return null;
   }

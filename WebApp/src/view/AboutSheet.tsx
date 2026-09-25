@@ -193,6 +193,7 @@ function UpdateChecker() {
 
 /** Copied from MainActivity.kt ChangelogDialog (emoji stripped). */
 const ANDROID_CHANGES = [
+  'Smart add: type "call CA tomorrow 5pm !1" and Nexus sets the date, reminder and priority for you',
   "Reliable reminders: one tap in Settings so the phone's battery saver can't stop your reminders",
   'Imported tasks now wait in an Imported folder inside each quadrant; only the ones due today step onto the matrix. Their reminders still ring on time',
   'One version everywhere: web, Nexus Desk and Android are all 4.0',
@@ -242,6 +243,9 @@ const ANDROID_CHANGES = [
 ];
 
 const WEB_CHANGES = [
+  'Nexus Desk for Mac shows reminders as real macOS notifications; ⌃⌥N (Ctrl+Alt+N on Windows) adds a task from any app',
+  'Sync rides out Wi-Fi changes and waking from sleep instead of saying Google Drive is unreachable',
+  'Keyboard first: ⌘K / Ctrl+K opens a command palette that finds any task or action; arrows or J K H L move a highlight round the matrix (Space done, P pin, ⌫ delete, ⌥1–4 move); smart add reads "call CA tomorrow 5pm !1" as the date, reminder and priority; ? lists every shortcut',
   'Imported tasks now wait in an Imported folder inside each quadrant; only the ones due today step onto the matrix. Their reminders still ring on time',
   'One version everywhere: web, Nexus Desk and Android are all 4.0',
   'Share, redesigned: chat-ready text with dates and ☐ checklist, a branded image card, and proper multi-page PDFs in any language',

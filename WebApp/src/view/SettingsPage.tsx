@@ -28,6 +28,7 @@ import { exportFullBackup, parseFullBackup, previewRestore } from '../sync/backu
 import { runSync, scheduleSync, signOutFlow } from '../sync/manager';
 import { hasRefreshToken } from '../sync/oauth';
 import { DUE_OFFSET_CHOICES, formatAlertTime } from '../calendar/deadline';
+import { SHORTCUTS_SUMMARY, shortcutsOpen } from './Shortcuts';
 import { formatDueAlerts, parseDueAlerts } from '../calendar/due';
 import { canInstall, isStandalone, promptInstall } from '../state/install';
 import { isPc, isWide } from '../state/viewport';
@@ -64,16 +65,6 @@ const Blue = '#3B9EFF';
 const Red = '#FF4060';
 const Accent = 'var(--nx-accent)';
 
-const KEYS: [string, string][] = [
-  ['⏎', 'New task (pick a priority, then type)'],
-  ['N', 'New task'],
-  ['1 2 3 4', 'Open High / Medium / Low / None'],
-  ['C', 'Calendar'],
-  ['M', 'Mini window (always on top)'],
-  ['S', 'Sync now'],
-  [',', 'Settings'],
-  ['esc', 'Close / back']
-];
 
 /**
  * Settings are grouped into categories. Phone / tablet: a list of categories, each opening its
@@ -286,7 +277,6 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const importInput = useRef<HTMLInputElement>(null);
   const [widgetsHelp, setWidgetsHelp] = useState(false);
-  const [keysHelp, setKeysHelp] = useState(false);
   const [longSession, setLongSession] = useState(false);
   useEffect(() => void hasRefreshToken().then(setLongSession), [s.googleEmail]);
   // Keep the dialog's text while it animates out after the choice clears `restore`.
@@ -542,7 +532,7 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
             <SettingsGroup>
               {isPc.value && (
                 <>
-                  <SettingsRow icon="keyboard" title="Keyboard shortcuts" subtitle="Enter new task · C calendar · M mini window · 1–4 quadrants" tint={Amber} onClick={() => setKeysHelp(true)} trailing={<Chevron />} />
+                  <SettingsRow icon="keyboard" title="Keyboard shortcuts" subtitle={SHORTCUTS_SUMMARY} tint={Amber} onClick={() => (shortcutsOpen.value = true)} trailing={<Chevron />} />
                   <GroupDivider />
                 </>
               )}
@@ -1080,7 +1070,7 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
               {isPc.value && (
                 <>
                   <GroupDivider />
-                  <SettingsRow icon="keyboard" title="Keyboard shortcuts" tint={Amber} onClick={() => setKeysHelp(true)} trailing={<Chevron />} />
+                  <SettingsRow icon="keyboard" title="Keyboard shortcuts" subtitle={SHORTCUTS_SUMMARY} tint={Amber} onClick={() => (shortcutsOpen.value = true)} trailing={<Chevron />} />
                 </>
               )}
             </SettingsGroup>
@@ -1170,17 +1160,6 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
           <h3>iPhone & iPad</h3>
           <p>Apple doesn't let web apps add home-screen widgets. Add Nexus to your Home Screen (Safari → Share → Add to Home Screen) for a full-screen app and reminders as notifications.</p>
         </div>
-      </Dialog>
-
-      <Dialog open={keysHelp} onClose={() => setKeysHelp(false)} title="Keyboard shortcuts" actions={<TextButton onClick={() => setKeysHelp(false)}>Done</TextButton>}>
-        <dl class="nx-keys">
-          {KEYS.map(([k, d]) => (
-            <div key={k}>
-              <dt>{k.split(' ').map((x) => <kbd key={x}>{x}</kbd>)}</dt>
-              <dd>{d}</dd>
-            </div>
-          ))}
-        </dl>
       </Dialog>
 
       <Dialog

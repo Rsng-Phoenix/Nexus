@@ -2,7 +2,7 @@ import '../styles/mini.css';
 import { signal } from '@preact/signals';
 import type { JSX } from 'preact';
 import { render } from 'preact';
-import { useMemo, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { addDaysIso, dateToIso, isoToDate, todayIso } from '../calendar/deadline';
 import { buildCalendar, monthGrid } from '../calendar/items';
 import { clashesByDay } from '../calendar/clashes';
@@ -147,6 +147,31 @@ export function MiniApp({ win, widget = false, only }: { win: Window; widget?: b
   const [prio, setPrio] = useState<Priority>('HIGH');
   const [text, setText] = useState('');
   const input = useRef<HTMLInputElement>(null);
+  // Nexus Desk's shortcut from any app (⌃⌥N on Mac) lands here, ready to type.
+  useEffect(() => {
+    // Only when this is the whole page (Nexus Desk / widget), never the mini window beside the matrix.
+    if (!widget) return;
+    const w = window as Window & { __nexusQuickAdd?: () => void };
+    w.__nexusQuickAdd = () => {
+      input.current?.focus();
+      input.current?.select();
+    };
+    // N (or Enter) anywhere in the window starts a task, like on the full matrix. Nexus Desk for
+    // Windows sends an "n" after Ctrl+Alt+N.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
+      const t = e.target;
+      if (t instanceof Element && t.closest('input, textarea, select, button, a, [contenteditable="true"], [role="dialog"]')) return;
+      if (e.key !== 'n' && e.key !== 'N' && e.key !== 'Enter') return;
+      e.preventDefault();
+      w.__nexusQuickAdd?.();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      delete w.__nexusQuickAdd;
+      window.removeEventListener('keydown', onKey);
+    };
+  }, []);
 
   const choose = (t: Tab) => {
     if (t === tab) return;

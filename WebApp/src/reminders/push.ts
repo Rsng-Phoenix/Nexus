@@ -9,6 +9,7 @@ import { upcomingMeetings } from '../calendar/meetings';
 import { upcomingClashes } from '../calendar/clashes';
 import { deliverRing, pendingSnoozes, type MeetInfo, type NotifySettings } from './notify';
 import { upcomingFires } from './schedule';
+import { showSnack } from '../state/toasts';
 
 /**
  * Reminders on the web.
@@ -22,6 +23,31 @@ type Device = { deviceId: string; secret: string };
 const HORIZON_MS = 7 * 24 * 60 * 60 * 1000;
 
 export const pushConfigured = () => !!PUSH_WORKER_URL;
+
+type DeskNote = { id: string; title: string; body: string; silent: boolean };
+type DeskBridge = { postMessage(m: { show?: DeskNote; clear?: string[] }): void };
+/** Nexus Desk for Mac shows reminders as real macOS notifications (see nexus-desk-mac.jxa). */
+function deskNotify(): DeskBridge | null {
+  const w = window as Window & { webkit?: { messageHandlers?: Record<string, DeskBridge> } };
+  return w.webkit?.messageHandlers?.nexusNotify ?? null;
+}
+export const inNexusDesk = () => !!deskNotify();
+
+/**
+ * Stands in for the service worker registration inside Nexus Desk (WebKit there has no web
+ * notifications), so every rule in deliverRing (pause, hourly cap, grouping) applies unchanged.
+ * While you're using the Desk window, macOS keeps banners quiet: a snackbar says it instead.
+ */
+function deskRegistration(bridge: DeskBridge): ServiceWorkerRegistration {
+  return {
+    showNotification: async (title: string, o: NotificationOptions = {}) => {
+      const body = o.body ?? '';
+      if (document.hasFocus() && document.visibilityState === 'visible') showSnack(body ? `${title} · ${body.split('\n')[0]}` : title);
+      bridge.postMessage({ show: { id: o.tag ?? `nexus:${Date.now()}`, title, body, silent: !!o.silent } });
+    },
+    getNotifications: async () => []
+  } as unknown as ServiceWorkerRegistration;
+}
 export const notificationsSupported = () => typeof Notification !== 'undefined' && 'serviceWorker' in navigator;
 
 async function device(): Promise<Device | null> {
@@ -185,8 +211,9 @@ async function publish(): Promise<void> {
 function armLocal(rings: Ring[], meets: Record<string, MeetInfo>): void {
   localTimers.forEach(clearTimeout);
   localTimers = [];
-  if (!notificationsSupported() || Notification.permission !== 'granted') return;
-  const usePush = pushConfigured();
+  const desk = deskNotify();
+  if (!desk && (!notificationsSupported() || Notification.permission !== 'granted')) return;
+  const usePush = !desk && pushConfigured();
   const now = Date.now();
   for (const r of rings) {
     if (r.kind === 'checkin') continue;
@@ -198,7 +225,7 @@ function armLocal(rings: Ring[], meets: Record<string, MeetInfo>): void {
       window.setTimeout(async () => {
         // With push, the service worker already shows it; only ring locally without push.
         if (usePush && (await device())) return;
-        const reg = await navigator.serviceWorker.ready;
+        const reg = desk ? deskRegistration(desk) : await navigator.serviceWorker.ready;
         const t = activeTasks.value.find((x) => x.taskUuid === r.ref);
         await deliverRing(reg, { kind, ref: r.ref, fireAt: r.fireAt, snoozed }, t, meets[r.ref]);
       }, delay)
@@ -232,6 +259,8 @@ export function initReminders(): void {
     if (document.visibilityState === 'hidden') void publish(); // re-arm the check-in on leave
   });
   window.addEventListener('online', () => void scheduleAll(500));
+  // Nexus Desk stays open for days: local timers only reach 24 hours ahead, so re-arm hourly.
+  if (deskNotify()) window.setInterval(() => void scheduleAll(), 60 * 60_000);
   void scheduleAll(1200);
 }
 

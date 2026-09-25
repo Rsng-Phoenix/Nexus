@@ -214,9 +214,11 @@ export async function hasDriveAppDataAccess(token: string): Promise<boolean> {
       'https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&pageSize=1&fields=files(id)',
       { headers: { Authorization: `Bearer ${token}` } }
     );
-    return probe.ok;
+    // Only Google refusing the token means no access; a network blip or a Drive outage must not
+    // throw away a good token (the sync itself reports those).
+    return probe.ok || (probe.status !== 401 && probe.status !== 403);
   } catch {
-    return false;
+    return true;
   }
 }
 

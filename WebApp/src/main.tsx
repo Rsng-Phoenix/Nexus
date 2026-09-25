@@ -7,7 +7,7 @@ import { startSheetAutoRefresh } from './import/liveSheet';
 import { startClashRadar } from './calendar/radar';
 import { parsePairLink } from './pair/pair';
 import { loadFeedStatus, publishFeed, schedulePublishFeed } from './calendar/feed';
-import { initReminders } from './reminders/push';
+import { inNexusDesk, initReminders } from './reminders/push';
 import * as nav from './state/nav';
 import { allTasks, onTasksWritten, reload } from './state/store';
 import { finishRedirectSignIn, onSyncState, runSync, scheduleSync } from './sync/manager';
@@ -83,6 +83,9 @@ function bootWidget() {
     startLinkedAutoRefresh();
     startSheetAutoRefresh();
     startClashRadar();
+    // Nexus Desk for Mac rings reminders as macOS notifications (its main window only, so the
+    // separate calendar window doesn't ring them twice).
+    if (inNexusDesk() && widgetView !== 'calendar') initReminders();
     if (import.meta.env.DEV) void installDevHook();
     // Edits made in the widget reach "Show Nexus in your calendar apps" too.
     void loadFeedStatus();
