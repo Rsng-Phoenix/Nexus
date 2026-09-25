@@ -228,3 +228,7 @@
 @media (min-width: 1024px) {
   .nx-radar-bar { margin: 0 20px 12px; max-width: 560px; }
 }
+
+/* Link a Google Sheet: the link step and the "keep updating" choice. */
+.nx-imp-link { display: flex; flex-direction: column; gap: 12px; }
+.nx-imp-keep { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 8px; }

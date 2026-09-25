@@ -1,5 +1,5 @@
 import { signal } from '@preact/signals';
-import type { LayoutMode, ThemeMode } from '../types';
+import type { LayoutMode, Priority, ThemeMode } from '../types';
 import { applyPalette, darkPalette, lightPalette, resolveDark } from '../theme/palette';
 
 const KEY = 'nexus_settings';
@@ -49,6 +49,10 @@ export interface Settings {
   linkedCalendars: LinkedCalendar[];
   /** Links removed here (by address), so a sync removes them on your other devices too. */
   linkedRemoved: LinkedRemoval[];
+  /** Google Sheets that keep updating their tasks (import/liveSheet.ts). */
+  linkedSheets: LinkedSheet[];
+  /** How often linked sheets are re-read (minutes; one of SHEET_REFRESH_CHOICES). */
+  sheetRefreshMinutes: number;
   /** 1 = weeks start on Monday, 0 = Sunday. */
   weekStart: 0 | 1;
   /** How often linked calendars are re-checked (minutes; one of CALENDAR_REFRESH_CHOICES). */
@@ -79,6 +83,29 @@ export type FeedCreds = { v: 1; id: string; key: string; createdAt: number; note
 /** [updatedAt]: last add/rename/colour/switch, so the newest change wins between devices (0 = older than sync). */
 export type LinkedCalendar = { id: string; name: string; url: string; color: string; enabled: boolean; updatedAt?: number };
 export type LinkedRemoval = { url: string; at: number };
+
+/** How a linked Google Sheet's rows become tasks: the choices made in the import wizard. */
+export type SheetMapping = {
+  headerRow: number;
+  titleCols: number[];
+  dateCol: number;
+  notesCols: number[];
+  priority: Priority | { col: number; fallback?: Priority };
+  offsets: number[];
+  alertTime: number;
+  dayFirst: boolean;
+};
+export type LinkedSheet = {
+  id: string;
+  name: string;
+  sheetId: string;
+  gid: string;
+  mapping: SheetMapping;
+  enabled: boolean;
+  lastSyncAt: number;
+  lastError: string;
+};
+export const SHEET_REFRESH_CHOICES = [5, 15, 30, 60, 180] as const;
 
 // Mirrors Android AppSettings.DEFAULT_* so both apps start out identical.
 export const DEFAULTS = {
@@ -144,6 +171,8 @@ const defaults: Settings = {
   ownerSyncedAt: 0,
   linkedCalendars: [],
   linkedRemoved: [],
+  linkedSheets: [],
+  sheetRefreshMinutes: 15,
   weekStart: 1,
   calendarRefreshMinutes: DEFAULTS.calendarRefreshMinutes,
   notifyMeetings: false,
@@ -188,6 +217,8 @@ function loadRaw(): Settings {
     if (!CLASH_MIN_CHOICES.includes(s.clashMinMinutes as (typeof CLASH_MIN_CHOICES)[number])) s.clashMinMinutes = 1;
     if (!Array.isArray(s.ignoredClashes)) s.ignoredClashes = [];
     if (!Array.isArray(s.linkedRemoved)) s.linkedRemoved = [];
+    if (!Array.isArray(s.linkedSheets)) s.linkedSheets = [];
+    if (!SHEET_REFRESH_CHOICES.includes(s.sheetRefreshMinutes as (typeof SHEET_REFRESH_CHOICES)[number])) s.sheetRefreshMinutes = 15;
     if (s.calendarFeed && !(typeof s.calendarFeed.id === 'string' && typeof s.calendarFeed.key === 'string')) s.calendarFeed = null;
     return s;
   } catch {

@@ -3,6 +3,7 @@ import './styles/nexus.css';
 import './styles/views.css';
 import * as db from './db/tasks';
 import { startLinkedAutoRefresh } from './calendar/linked';
+import { startSheetAutoRefresh } from './import/liveSheet';
 import { startClashRadar } from './calendar/radar';
 import { parsePairLink } from './pair/pair';
 import { loadFeedStatus, publishFeed, schedulePublishFeed } from './calendar/feed';
@@ -80,6 +81,7 @@ function bootWidget() {
     );
     void finishRedirectSignIn().then((msg) => msg && showSnack(msg, undefined, 4000));
     startLinkedAutoRefresh();
+    startSheetAutoRefresh();
     startClashRadar();
     if (import.meta.env.DEV) void installDevHook();
     // Edits made in the widget reach "Show Nexus in your calendar apps" too.
@@ -117,6 +119,7 @@ function bootApp() {
     if (import.meta.env.DEV) void installDevHook();
     initReminders();
     startLinkedAutoRefresh();
+    startSheetAutoRefresh();
     startClashRadar();
     // Back from Google's sign-in page: finish signing in (asks about local tasks if needed).
     void finishRedirectSignIn().then((msg) => msg && showSnack(msg, undefined, 4000));
@@ -178,7 +181,7 @@ if ('serviceWorker' in navigator) {
 
 /** Dev-only handle for scripted UI checks (tree-shaken out of production builds). */
 async function installDevHook(): Promise<void> {
-  const [store, settings, manager, prompts, linked, ics, pair, feed] = await Promise.all([
+  const [store, settings, manager, prompts, linked, ics, pair, feed, sheet] = await Promise.all([
     import('./state/store'),
     import('./settings/store'),
     import('./sync/manager'),
@@ -186,7 +189,8 @@ async function installDevHook(): Promise<void> {
     import('./calendar/linked'),
     import('./calendar/ics'),
     import('./pair/pair'),
-    import('./calendar/feed')
+    import('./calendar/feed'),
+    import('./import/liveSheet')
   ]);
-  Object.assign(window, { __nx: { nav, store, settings, manager, prompts, db, linked, ics, pair, feed } });
+  Object.assign(window, { __nx: { nav, store, settings, manager, prompts, db, linked, ics, pair, feed, sheet } });
 }

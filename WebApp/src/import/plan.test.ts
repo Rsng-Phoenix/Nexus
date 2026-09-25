@@ -53,6 +53,32 @@ describe('buildImportPlan', () => {
     [c('Eps'), c('Board'), c('2026-10-09'), c('whatever'), c(true)]
   ];
 
+  it('rows with the same title and date keep every reason (one task, notes combined)', async () => {
+    const sheet: Cell[][] = [
+      [c('Task'), c('Due'), c('Reason'), c('Priority')],
+      [c('RTO follow-up'), c('2026-10-05'), c('Customer not home'), c('Low')],
+      [c('RTO follow-up'), c('2026-10-05'), c('Wrong address'), c('High')],
+      [c('RTO follow-up'), c('2026-10-05'), c('Customer not home'), c('Low')], // exact repeat: nothing new
+      [c('RTO follow-up'), c('2026-10-06'), c('Refused'), c('Low')] // other date: its own task
+    ];
+    const plan = await buildImportPlan({
+      fileName: 'rto.csv',
+      sheetName: '',
+      rows: sheet,
+      headerRow: 0,
+      titleCols: [0],
+      dateCol: 1,
+      notesCols: [2],
+      priority: { col: 3 },
+      offsets: [0]
+    });
+    expect(plan.duplicates).toBe(2);
+    expect(plan.items.map((i) => [i.dueDate, i.priority, i.notes])).toEqual([
+      ['2026-10-05', 'HIGH', 'Reason: Customer not home\nReason: Wrong address'],
+      ['2026-10-06', 'LOW', 'Reason: Refused']
+    ]);
+  });
+
   it('builds items, invalid rows and duplicate count', async () => {
     const plan = await buildImportPlan({
       fileName: 'Filings.xlsx',

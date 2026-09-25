@@ -137,3 +137,17 @@
 .nx-feed .foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .nx-feed .foot .nx-text-btn { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
 .nx-feed .note { font-size: 11.5px; line-height: 1.5; color: var(--nx-textTer); }
+
+/* Settings → Import: linked Google Sheets. */
+.nx-sheets { display: flex; flex-direction: column; gap: 8px; padding: 4px 14px 12px; }
+.nx-sheets ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.nx-sheets li { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 14px; background: var(--nx-surfaceEl, var(--nx-surface)); border: 1px solid var(--nx-stroke); }
+.nx-sheets .ic { width: 32px; height: 32px; border-radius: 10px; flex: none; display: grid; place-items: center; color: #00D084; background: color-mix(in srgb, #00D084 14%, transparent); }
+.nx-sheets .txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.nx-sheets .txt b { font-size: 14px; color: var(--nx-textPri); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nx-sheets .txt small { font-size: 12px; line-height: 1.4; color: var(--nx-textSec); }
+.nx-sheets .txt small.err { color: #ff4060; }
+.nx-sheets li button, .nx-sheets li a { width: 32px; height: 32px; flex: none; display: grid; place-items: center; border: 0; border-radius: 10px; background: transparent; color: var(--nx-textSec); cursor: pointer; }
+.nx-sheets li button:hover, .nx-sheets li a:hover { background: var(--nx-surface); color: var(--nx-textPri); }
+.nx-sheets li button.danger:hover { color: #ff4060; }
+.nx-sheets li button:disabled { opacity: 0.4; cursor: default; }

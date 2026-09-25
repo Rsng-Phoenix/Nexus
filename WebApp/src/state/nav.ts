@@ -27,7 +27,7 @@ export type Layer =
   | { kind: 'clashes' }
   | { kind: 'pair'; link?: PairLink }
   | { kind: 'icsImport'; fileName: string; text: string }
-  | { kind: 'sheetImport'; file: File }
+  | { kind: 'sheetImport'; file?: File }
   | { kind: 'mini' };
 
 export type LayerEntry = Layer & { id: number };

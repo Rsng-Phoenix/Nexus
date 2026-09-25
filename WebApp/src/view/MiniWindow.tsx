@@ -147,7 +147,6 @@ export function MiniApp({ win, widget = false, only }: { win: Window; widget?: b
   const [prio, setPrio] = useState<Priority>('HIGH');
   const [text, setText] = useState('');
   const input = useRef<HTMLInputElement>(null);
-  const wide = win.innerWidth >= 520;
 
   const choose = (t: Tab) => {
     if (t === tab) return;
@@ -170,7 +169,7 @@ export function MiniApp({ win, widget = false, only }: { win: Window; widget?: b
 
   const open = activeTasks.value.filter((t) => !t.isCompleted && !t.isWontDo && !t.taskUuid.startsWith('nexus-tutorial-'));
   return (
-    <div class={`nx-mini ${wide ? 'wide' : ''}`}>
+    <div class="nx-mini">
       <header class="nx-mini-head">
         <span class="brand" aria-label="Nexus">
           <span class="mark" aria-hidden="true" dangerouslySetInnerHTML={{ __html: nexusLogoHtml(18) }} />

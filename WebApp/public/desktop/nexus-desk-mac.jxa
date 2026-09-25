@@ -135,6 +135,7 @@ function makeWindow(title, url, autosave, offsetY) {
   w.autoresizingMask = 2 | 16; // follow the window's width and height
   w.customUserAgent = USER_AGENT;
   w.UIDelegate = controller;
+  w.navigationDelegate = controller; // only for webCryptoKey(); navigation itself is left as default
   if (w.respondsToSelector('setInspectable:')) w.inspectable = true;
   p.contentView.addSubview(w);
   w.loadRequest($.NSURLRequest.requestWithURL($.NSURL.URLWithString(url)));
@@ -462,6 +463,27 @@ function fetchIcs(message) {
   task.resume;
 }
 
+// ─── Web Crypto key (no keychain prompts) ────────────────────────────────────
+
+// WebKit protects keys the page stores (Nexus keeps its Google sign-in that way) with a master
+// key. By default that lives in the login keychain, and macOS asks for your password again after
+// every Desk update (each build looks like a new app). Nexus Desk hands WebKit its own key
+// instead: 16 random bytes in a file only you can read. It protects Nexus's own data only (the
+// sign-in it guards can reach nothing but Nexus's folder in your Drive).
+let cryptoKeyData = null;
+function webCryptoKey() {
+  if (cryptoKeyData) return cryptoKeyData;
+  const files = $.NSFileManager.defaultManager;
+  const dir = $.NSHomeDirectory().js + '/Library/Application Support/Nexus Desk';
+  const path = dir + '/webcrypto.key';
+  const saved = $.NSData.dataWithContentsOfFile($(path));
+  if (!saved.isNil() && saved.length === 16) return (cryptoKeyData = saved);
+  files.createDirectoryAtPathWithIntermediateDirectoriesAttributesError($(dir), true, $({ NSFilePosixPermissions: 448 }), null); // 0700
+  const fresh = $.NSFileHandle.fileHandleForReadingAtPath($('/dev/urandom')).readDataOfLength(16);
+  files.createFileAtPathContentsAttributes($(path), fresh, $({ NSFilePosixPermissions: 384 })); // 0600
+  return (cryptoKeyData = fresh);
+}
+
 // ─── Controller (menu actions, timer, web view delegate) ───────────────────
 
 function sizeBy(tag) {
@@ -475,8 +497,10 @@ function sizeBy(tag) {
 ObjC.registerSubclass({
   name: 'NexusDeskController',
   superclass: 'NSObject',
-  protocols: ['NSMenuDelegate', 'WKUIDelegate'], // + userContentController:didReceiveScriptMessage: (WKScriptMessageHandler isn't visible to JXA by name)
+  protocols: ['NSMenuDelegate', 'WKUIDelegate', 'WKNavigationDelegate'], // + userContentController:didReceiveScriptMessage: (WKScriptMessageHandler isn't visible to JXA by name)
   methods: {
+    // WKNavigationDelegate (private hook WebKit asks before touching the keychain).
+    '_webCryptoMasterKeyForWebView:': { types: ['id', ['id']], implementation: () => webCryptoKey() },
     'userContentController:didReceiveScriptMessage:': {
       types: ['void', ['id', 'id']],
       implementation: (_ucc, message) => fetchIcs(message)

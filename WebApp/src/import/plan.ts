@@ -18,9 +18,11 @@ import { deterministicUuid } from './hash';
  *   other numbers in shortest round-trip form ("1.5"); booleans "TRUE"/"FALSE"; date-formatted
  *   numbers as their ISO day.
  * - dueDate: ISO YYYY-MM-DD.
- * Rows with the same uuid (same title and date) after the first are counted as duplicates and
- * skipped. Rows that are entirely empty are skipped silently; rows with no title or no valid
- * date are reported in `invalid` (spec: never silently).
+ * Rows with the same uuid (same title and date) become one task: their notes (e.g. a "Reason"
+ * column) are added to the first row's task, so nothing a row says is lost, and the highest
+ * priority among them wins. `duplicates` counts the rows combined this way. Rows that are
+ * entirely empty are skipped silently; rows with no title or no valid date are reported in
+ * `invalid` (spec: never silently).
  */
 export const IMPORT_UUID_PREFIX = 'xl-';
 export const TITLE_JOINER = ' · ';
@@ -77,6 +79,17 @@ export function parsePriorityText(text: string): Priority | null {
   return PRIORITY_WORDS[text.trim().toLowerCase()] ?? null;
 }
 
+const PRIORITY_RANK: Record<Priority, number> = { NONE: 0, LOW: 1, MEDIUM: 2, HIGH: 3 };
+
+/** [a] plus the lines of [b] that [a] doesn't already have (so repeated rows don't repeat notes). */
+export function mergeNoteLines(a: string, b: string): string {
+  if (!b) return a;
+  if (!a) return b;
+  const have = new Set(a.split('\n'));
+  const add = b.split('\n').filter((l) => !have.has(l));
+  return add.length ? `${a}\n${add.join('\n')}` : a;
+}
+
 export function numberText(n: number): string {
   return String(n);
 }
@@ -118,7 +131,7 @@ export async function buildImportPlan(input: ImportPlanInput): Promise<ImportPla
 
   const items: ImportItem[] = [];
   const invalid: ImportInvalidRow[] = [];
-  const seen = new Set<string>();
+  const byUuid = new Map<string, ImportItem>();
   let duplicates = 0;
 
   for (let r = Math.max(0, headerRow + 1); r < rows.length; r++) {
@@ -140,12 +153,6 @@ export async function buildImportPlan(input: ImportPlanInput): Promise<ImportPla
       continue;
     }
     const taskUuid = await importTaskUuid(input.fileName, input.sheetName, title, dueDate);
-    if (seen.has(taskUuid)) {
-      duplicates++;
-      continue;
-    }
-    seen.add(taskUuid);
-
     const notes = notesCols
       .filter((c) => !isEmptyCell(row[c]))
       .map((c) => `${headerName(rows, headerRow, c)}: ${cellText(row[c], dateOpts).trim()}`)
@@ -153,7 +160,16 @@ export async function buildImportPlan(input: ImportPlanInput): Promise<ImportPla
     const priority =
       (priorityCol >= 0 ? parsePriorityText(cellText(row[priorityCol])) : null) ?? fixedPriority;
 
-    items.push({
+    const first = byUuid.get(taskUuid);
+    if (first) {
+      // Same title and date: one task, keeping every row's notes (only lines it doesn't have yet).
+      duplicates++;
+      first.notes = mergeNoteLines(first.notes, notes);
+      if (PRIORITY_RANK[priority] > PRIORITY_RANK[first.priority]) first.priority = priority;
+      continue;
+    }
+
+    const item: ImportItem = {
       taskUuid,
       description: title,
       notes,
@@ -163,7 +179,9 @@ export async function buildImportPlan(input: ImportPlanInput): Promise<ImportPla
       dueAlertTime,
       rowIndex: r,
       exists: input.existingUuids?.has(taskUuid) ?? false
-    });
+    };
+    byUuid.set(taskUuid, item);
+    items.push(item);
   }
   return { items, invalid, duplicates };
 }
