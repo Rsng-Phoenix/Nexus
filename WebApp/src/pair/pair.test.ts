@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Settings } from '../settings/store';
-import { b64u, cleanPayload, newCalendars, newPairLink, openPayload, pairUrl, parsePairLink, sealPayload, unb64u, verifyCode, type SetupPayload } from './pair';
+import { b64u, cleanPayload, newCalendars, newPairLink, openPayload, pairUrl, parsePairLink, sealPayload, unb64u, verifyCode, type SetupPayload, cleanMapping } from './pair';
 
 const payload: SetupPayload = {
   v: 1,
@@ -67,5 +67,36 @@ describe('scan to set up', () => {
   it('base64url round-trips bytes', () => {
     const b = new Uint8Array([0, 255, 62, 63, 250, 1]);
     expect(Array.from(unb64u(b64u(b)))).toEqual(Array.from(b));
+  });
+});
+
+describe('linked Google Sheets travel with a setup', () => {
+  const good = {
+    name: 'Appointments',
+    sheetId: '1eauNFUiHzr8Pp2P6BDrjUbh_tTQIOTqz',
+    gid: '',
+    mapping: { headerRow: 0, titleCols: [], titleText: 'Appointment', dateCol: 8, notesCols: [1, 6], priority: 'MEDIUM', offsets: [0, -1], alertTime: 540, dayFirst: true }
+  };
+  it('keeps a well-formed sheet and its column choices', () => {
+    const p = cleanPayload({ v: 1, from: 'Mac', at: 1, calendars: [], prefs: {}, sheets: [good] });
+    expect(p.sheets).toEqual([good]);
+  });
+  it('drops sheets with a bad address or unusable columns, and older senders without sheets still work', () => {
+    const bad = [
+      { ...good, sheetId: '../../etc' },
+      { ...good, gid: '0; drop' },
+      { ...good, mapping: { ...good.mapping, dateCol: -1 } },
+      { ...good, mapping: { ...good.mapping, titleCols: [], titleText: '' } },
+      { ...good, mapping: null }
+    ];
+    expect(cleanPayload({ v: 1, calendars: [], prefs: {}, sheets: bad }).sheets ?? []).toEqual([]);
+    expect(cleanPayload({ v: 1, calendars: [], prefs: {} }).sheets).toBeUndefined();
+  });
+  it('clamps odd values instead of trusting them', () => {
+    const m = cleanMapping({ ...good.mapping, priority: 'URGENT', alertTime: 99999, offsets: [0, 'x', 9999, -1], titleText: 'x'.repeat(200) })!;
+    expect(m.priority).toBe('MEDIUM');
+    expect(m.alertTime).toBe(540);
+    expect(m.offsets).toEqual([0, -1]);
+    expect(m.titleText).toHaveLength(80);
   });
 });

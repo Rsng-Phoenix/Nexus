@@ -16,8 +16,7 @@ import {
   uploadSetup,
   verifyCode,
   type PairLink,
-  type SetupPayload
-} from '../pair/pair';
+  type SetupPayload, newSheets } from '../pair/pair';
 import { enableNotifications, workerAuth } from '../reminders/push';
 import { getSettings, settingsSig } from '../settings/store';
 import * as nav from '../state/nav';
@@ -252,6 +251,11 @@ function ShowSend({ onDone }: { onDone: (s: Stage) => void }) {
         <li>
           <Icon name="event" size={16} /> {cals ? `${cals} linked calendar${cals === 1 ? '' : 's'}` : 'No linked calendars yet'}
         </li>
+        {(payload.sheets?.length ?? 0) > 0 && (
+          <li>
+            <Icon name="table" size={16} /> {payload.sheets!.length} linked Google Sheet{payload.sheets!.length === 1 ? '' : 's'}
+          </li>
+        )}
         <li>
           <Icon name="tune" size={16} /> Theme, notifications and calendar settings
         </li>
@@ -318,7 +322,9 @@ function ShowGet({ onPayload }: { onPayload: (p: SetupPayload) => void }) {
 
 function Preview({ payload, onApplied, onCancel }: { payload: SetupPayload; onApplied: (added: number) => void; onCancel: () => void }) {
   const fresh = newCalendars(payload, settingsSig.value.linkedCalendars);
+  const freshSheets = newSheets(payload, settingsSig.value.linkedSheets);
   const [cals, setCals] = useState(fresh.length > 0);
+  const [sheets, setSheets] = useState(freshSheets.length > 0);
   const [prefs, setPrefs] = useState(true);
   const providers = [...new Set(fresh.map((c) => calendarProvider(c.url).label))];
   return (
@@ -340,6 +346,16 @@ function Preview({ payload, onApplied, onCancel }: { payload: SetupPayload; onAp
         </span>
         <Switch label="Linked calendars" checked={cals && fresh.length > 0} onChange={(v) => setCals(v)} />
       </label>
+      {(payload.sheets?.length ?? 0) > 0 && (
+        <label class="nx-pair-opt">
+          <Icon name="table" size={20} />
+          <span>
+            <b>{freshSheets.length ? `${freshSheets.length} linked Google Sheet${freshSheets.length === 1 ? '' : 's'}` : 'Linked Google Sheets'}</b>
+            <small>{freshSheets.length ? `${freshSheets.map((x) => x.name).join(', ')} · this device reads them and makes the same tasks` : 'Already on this device'}</small>
+          </span>
+          <Switch label="Linked Google Sheets" checked={sheets && freshSheets.length > 0} onChange={(v) => setSheets(v)} />
+        </label>
+      )}
       <label class="nx-pair-opt">
         <Icon name="tune" size={20} />
         <span>
@@ -354,10 +370,10 @@ function Preview({ payload, onApplied, onCancel }: { payload: SetupPayload; onAp
         </button>
         <PrimaryButton
           icon="check"
-          disabled={!(cals && fresh.length) && !prefs}
+          disabled={!(cals && fresh.length) && !(sheets && freshSheets.length) && !prefs}
           onClick={() => {
             haptic('DRAG_DROP');
-            onApplied(applySetup(payload, { calendars: cals, prefs }));
+            onApplied(applySetup(payload, { calendars: cals, prefs, sheets }));
           }}
         >
           Set up this device
@@ -407,6 +423,11 @@ function ConfirmSend({ link, code, onSent, onCancel }: { link: PairLink; code: s
         <li>
           <Icon name="event" size={16} /> {payload.calendars.length} linked calendar{payload.calendars.length === 1 ? '' : 's'} (their private links)
         </li>
+        {(payload.sheets?.length ?? 0) > 0 && (
+          <li>
+            <Icon name="table" size={16} /> {payload.sheets!.length} linked Google Sheet{payload.sheets!.length === 1 ? '' : 's'} (their links and column choices)
+          </li>
+        )}
         <li>
           <Icon name="tune" size={16} /> Your settings{payload.account ? ` and your Google address` : ''}
         </li>

@@ -5,10 +5,11 @@ import { parseDueAlerts } from '../calendar/due';
 import { columnLetter, isEmptyRow, type Cell } from '../import/cell';
 import { csvRowsToCells, parseCsv } from '../import/csv';
 import { detectDayFirst, detectHeaderRow, suggestDateColumn } from '../import/dates';
+import { fetchSheetRows, linkSheet, parseSheetUrl, sheetFileName, type SheetRef } from '../import/liveSheet';
 import { buildImportPlan, cellText, type ImportPlan, type ImportPriority } from '../import/plan';
 import { readXlsx } from '../import/xlsx';
 import { haptic } from '../lib/haptics';
-import { getSettings } from '../settings/store';
+import { getSettings, sheetRefreshLabel } from '../settings/store';
 import { allTasks, importTasks } from '../state/store';
 import { offerUndo, showSnack } from '../state/toasts';
 import type { Priority } from '../types';
@@ -25,16 +26,25 @@ const PREVIEW_ROWS = 6;
 /**
  * Excel / CSV → tasks with deadlines. The file is read on this device only (never uploaded).
  * Every row with a valid date becomes a task due that day; alerts ring on the chosen days.
+ * Without a file it starts by asking for a Google Sheet link, which can keep updating its tasks
+ * (import/liveSheet.ts).
  */
-export function SheetImportPage(p: LayerProps & { file: File }) {
+export function SheetImportPage(p: LayerProps & { file?: File }) {
   const s = getSettings();
   const [book, setBook] = useState<Book | null>(null);
+  // Google Sheet source: the pasted link, the parsed address once read, and whether to keep it updating.
+  const [sheetLink, setSheetLink] = useState('');
+  const [sheetRef, setSheetRef] = useState<SheetRef | null>(null);
+  const [reading, setReading] = useState(false);
+  const [keepUpdating, setKeepUpdating] = useState(true);
+  const [sheetName, setSheetName] = useState('');
   const [loadError, setLoadError] = useState('');
   const [step, setStep] = useState(0);
   const [sheetIdx, setSheetIdx] = useState(0);
   const [hasHeader, setHasHeader] = useState(true);
   const [headerRow, setHeaderRow] = useState(0);
   const [titleCols, setTitleCols] = useState<number[]>([]);
+  const [titleText, setTitleText] = useState('');
   const [dateCol, setDateCol] = useState(-1);
   const [notesCols, setNotesCols] = useState<number[]>([]);
   const [prioMode, setPrioMode] = useState<'fixed' | 'column'>('fixed');
@@ -46,17 +56,39 @@ export function SheetImportPage(p: LayerProps & { file: File }) {
   const [plan, setPlan] = useState<ImportPlan | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const readSheet = async () => {
+    const ref = parseSheetUrl(sheetLink);
+    if (!ref) {
+      setLoadError('Paste the link from Google Sheets (Share → Copy link). It starts with https://docs.google.com/spreadsheets/d/…');
+      return;
+    }
+    setLoadError('');
+    setReading(true);
+    try {
+      const rows = await fetchSheetRows(ref);
+      if (!rows.some((r) => !isEmptyRow(r))) throw new Error('This sheet tab is empty.');
+      setSheetRef(ref);
+      setBook({ sheets: [{ name: '', rows, truncated: rows.length >= 5000 }], date1904: false });
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : 'This sheet could not be read.');
+    } finally {
+      setReading(false);
+    }
+  };
+
   // Read the file.
   useEffect(() => {
+    if (!p.file) return;
+    const file = p.file;
     void (async () => {
       try {
-        if (p.file.size > 25 * 1024 * 1024) throw new Error('That file is over 25 MB. Split it or save only the sheet you need.');
-        if (/\.xls$/i.test(p.file.name)) throw new Error('Old .xls files aren’t supported. In Excel choose File → Save As → Excel Workbook (.xlsx).');
-        if (/\.(csv|tsv|txt)$/i.test(p.file.name) || p.file.type.startsWith('text/')) {
-          const r = parseCsv(await p.file.text());
+        if (file.size > 25 * 1024 * 1024) throw new Error('That file is over 25 MB. Split it or save only the sheet you need.');
+        if (/\.xls$/i.test(file.name)) throw new Error('Old .xls files aren’t supported. In Excel choose File → Save As → Excel Workbook (.xlsx).');
+        if (/\.(csv|tsv|txt)$/i.test(file.name) || file.type.startsWith('text/')) {
+          const r = parseCsv(await file.text());
           setBook({ sheets: [{ name: '', rows: csvRowsToCells(r.rows), truncated: r.truncated }], date1904: false });
         } else {
-          const wb = await readXlsx(await p.file.arrayBuffer());
+          const wb = await readXlsx(await file.arrayBuffer());
           const sheets = wb.sheets.filter((x) => !x.hidden && x.rows.some((r) => !isEmptyRow(r)));
           if (!sheets.length) throw new Error('This workbook has no data.');
           setBook({ sheets, date1904: wb.date1904 });
@@ -118,12 +150,13 @@ export function SheetImportPage(p: LayerProps & { file: File }) {
     if (step !== 3 || !sheet) return;
     setPlan(null);
     void buildImportPlan({
-      fileName: p.file.name,
-      sheetName: sheet.name,
+      fileName: sheetRef ? sheetFileName(sheetRef) : (p.file?.name ?? ''),
+      sheetName: sheetRef ? sheetRef.gid : sheet.name,
       rows,
       headerRow: hr,
       // Left-to-right column order (not tap order), so re-imports give the same ids (as Android).
       titleCols: [...titleCols].sort((a, b) => a - b),
+      titleText: titleText.trim(),
       dateCol,
       notesCols: [...notesCols].sort((a, b) => a - b),
       priority,
@@ -135,13 +168,36 @@ export function SheetImportPage(p: LayerProps & { file: File }) {
     }).then(setPlan);
   }, [step]);
 
-  const canNext = step === 0 ? rows.length > 0 : step === 1 ? titleCols.length > 0 && dateCol >= 0 : true;
+  const canNext = step === 0 ? rows.length > 0 : step === 1 ? (titleCols.length > 0 || titleText.trim() !== '') && dateCol >= 0 : true;
   const toggleIn = (list: number[], v: number) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
 
   const run = async () => {
     if (!plan) return;
     setBusy(true);
     haptic('CHECK');
+    if (sheetRef && keepUpdating && sheet) {
+      try {
+        const mapping = {
+          headerRow: hr,
+          titleCols,
+          titleText: titleText.trim(),
+          dateCol,
+          notesCols,
+          priority,
+          offsets,
+          alertTime: time,
+          dayFirst
+        };
+        const { link, result } = await linkSheet(sheetRef, sheetName, mapping, sheet.rows);
+        p.onDismiss();
+        const parts = [result.added && `${result.added} added`, result.updated && `${result.updated} updated`].filter(Boolean);
+        showSnack(`“${link.name}” linked · ${parts.join(' · ') || 'up to date'} · it keeps updating`, undefined, 5000);
+      } catch (e) {
+        setBusy(false);
+        showSnack(`Linking failed: ${e instanceof Error ? e.message : 'unknown error'}.`, undefined, 5000);
+      }
+      return;
+    }
     let r: Awaited<ReturnType<typeof importTasks>>;
     try {
       r = await importTasks(
@@ -166,8 +222,32 @@ export function SheetImportPage(p: LayerProps & { file: File }) {
   };
 
   const body = (() => {
+    if (!p.file && !book)
+      return (
+        <div class="nx-imp-link">
+          <p class="lead">Paste the link to a Google Sheet. Each row with a date becomes a task, and Nexus keeps them updated as the sheet changes.</p>
+          <input
+            class="nx-input"
+            type="url"
+            inputMode="url"
+            placeholder="https://docs.google.com/spreadsheets/d/…"
+            value={sheetLink}
+            onInput={(e) => setSheetLink(e.currentTarget.value)}
+            onKeyDown={(e) => e.key === 'Enter' && void readSheet()}
+            aria-label="Google Sheet link"
+          />
+          {loadError && <p class="err">{loadError}</p>}
+          <PrimaryButton icon="link" disabled={reading || !sheetLink.trim()} onClick={() => void readSheet()}>
+            {reading ? 'Reading…' : 'Read sheet'}
+          </PrimaryButton>
+          <p class="hint">
+            The sheet must be shared as “Anyone with the link” (Viewer): in Google Sheets, Share → General access. Nexus reads it straight from
+            Google on this device; to open the tab you want, copy the link while that tab is showing.
+          </p>
+        </div>
+      );
     if (loadError) return <p class="err">{loadError}</p>;
-    if (!book || !sheet) return <p class="lead">Reading {p.file.name}…</p>;
+    if (!book || !sheet) return <p class="lead">Reading {p.file?.name}…</p>;
     if (step === 0)
       return (
         <>
@@ -192,14 +272,34 @@ export function SheetImportPage(p: LayerProps & { file: File }) {
           </label>
           <PreviewTable rows={rows} hr={hr} cols={cols} colName={colName} text={text} />
           <p class="hint">
-            {rows.length - (hr + 1)} rows{sheet.truncated ? ' (only the first 5,000 are read)' : ''} · the file stays on this device.
+            {rows.length - (hr + 1)} rows{sheet.truncated ? ' (only the first 5,000 are read)' : ''} · {p.file ? 'the file stays on this device' : 'read from Google Sheets on this device'}.
           </p>
         </>
       );
     if (step === 1)
       return (
         <>
-          <ColumnPicker label="Task title" hint="Pick one or more — they’re joined with “·”" cols={cols} colName={colName} sample={sample} selected={titleCols} onToggle={(c) => setTitleCols(toggleIn(titleCols, c))} />
+          <div class="nx-imp-field">
+            <span class="lbl">Same title for every row (optional)</span>
+            <input
+              class="nx-input"
+              placeholder="e.g. Appointment"
+              maxLength={80}
+              value={titleText}
+              onInput={(e) => setTitleText(e.currentTarget.value)}
+              aria-label="Same title for every row"
+            />
+            <p class="hint">Every task starts with these words. Leave empty to use columns only; rows on the same day then become one task that lists them all.</p>
+          </div>
+          <ColumnPicker
+            label={titleText.trim() ? 'Add to the title (optional)' : 'Task title'}
+            hint={titleText.trim() ? `Shown after “${titleText.trim()}”, joined with “·”` : 'Pick one or more — they’re joined with “·”'}
+            cols={cols}
+            colName={colName}
+            sample={sample}
+            selected={titleCols}
+            onToggle={(c) => setTitleCols(toggleIn(titleCols, c))}
+          />
           <ColumnPicker label="Date" hint="Each row is reminded around this date" cols={cols} colName={colName} sample={sample} selected={dateCol >= 0 ? [dateCol] : []} onToggle={(c) => setDateCol(c)} />
           {ambiguous && (
             <label class="nx-imp-switch">
@@ -258,8 +358,28 @@ export function SheetImportPage(p: LayerProps & { file: File }) {
           <div><b>{plan.items.length - updates}</b><span>new tasks</span></div>
           <div><b>{updates}</b><span>already here · will update</span></div>
           <div class={plan.invalid.length ? 'warn' : ''}><b>{plan.invalid.length}</b><span>rows skipped</span></div>
-          {plan.duplicates > 0 && <div><b>{plan.duplicates}</b><span>duplicate rows merged</span></div>}
+          {plan.duplicates > 0 && <div><b>{plan.duplicates}</b><span>rows with the same title and date combined (their notes kept)</span></div>}
         </div>
+        {sheetRef && (
+          <div class="nx-imp-keep">
+            <label class="nx-imp-switch">
+              <span>
+                <b>Keep updating from this sheet</b>
+                <small>
+                  {keepUpdating
+                    ? s.sheetRefreshMinutes === 0
+                      ? 'Updates when you tap Update now in Settings (you chose no automatic reads); your ticks and edits stay'
+                      : `New and changed rows update their tasks every ${sheetRefreshLabel(s.sheetRefreshMinutes)} while Nexus is open; your ticks and edits stay`
+                    : 'Import once, like a file'}
+                </small>
+              </span>
+              <Switch checked={keepUpdating} onChange={setKeepUpdating} label="Keep updating from this sheet" />
+            </label>
+            {keepUpdating && (
+              <input class="nx-input" placeholder="Name (e.g. RTO tracker)" value={sheetName} maxLength={60} onInput={(e) => setSheetName(e.currentTarget.value)} aria-label="Name for this sheet" />
+            )}
+          </div>
+        )}
         <p class="hint">
           Alerts: {offsets.length ? offsets.map((o) => DUE_OFFSET_CHOICES.find((c) => c.offset === o)?.label ?? `${o} d`).join(', ') : 'none'} at {formatAlertTime(time)}.
         </p>
@@ -294,7 +414,7 @@ export function SheetImportPage(p: LayerProps & { file: File }) {
 
   return (
     <Page leaving={p.leaving} onExited={p.onExited} onDismiss={p.onDismiss} class="nx-imp">
-      <PageHeader title="Import from a sheet" subtitle={p.file.name} onBack={() => (step > 0 ? setStep(step - 1) : p.onDismiss())} />
+      <PageHeader title={p.file ? 'Import from a sheet' : 'Link a Google Sheet'} subtitle={p.file?.name ?? (sheetRef ? 'Google Sheets' : undefined)} onBack={() => (step > 0 ? setStep(step - 1) : p.onDismiss())} />
       <div class="nx-imp-steps" role="list">
         {STEPS.map((label, i) => (
           <span key={label} role="listitem" class={i === step ? 'on' : i < step ? 'done' : ''}>
@@ -316,7 +436,7 @@ export function SheetImportPage(p: LayerProps & { file: File }) {
             </PrimaryButton>
           ) : (
             <PrimaryButton icon="download" onClick={() => void run()} disabled={busy || !plan || plan.items.length === 0}>
-              {busy ? 'Importing…' : `Import ${plan?.items.length ?? ''} tasks`}
+              {busy ? 'Importing…' : sheetRef && keepUpdating ? `Link and import ${plan?.items.length ?? ''} tasks` : `Import ${plan?.items.length ?? ''} tasks`}
             </PrimaryButton>
           )}
         </div>

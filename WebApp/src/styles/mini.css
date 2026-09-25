@@ -46,7 +46,8 @@
 @keyframes nx-mini-in { from { opacity: 0; transform: translateY(6px); } }
 
 .nx-mini-quads { display: flex; flex-direction: column; gap: 8px; }
-.nx-mini.wide .nx-mini-quads { display: grid; grid-template-columns: 1fr 1fr; }
+/* Two columns once the window is wide enough; follows every resize (it's the window's own width, not a render-time check). */
+@container (min-width: 520px) { .nx-mini-quads { display: grid; grid-template-columns: 1fr 1fr; } }
 .nx-mini-quad { border-radius: 14px; padding: 8px 6px 6px; background: color-mix(in srgb, var(--c) 6%, var(--nx-surface)); border: 1px solid color-mix(in srgb, var(--c) 18%, transparent); animation: nx-mini-quad 420ms var(--ease-bouncy) both; animation-delay: calc(var(--q) * 50ms); }
 @keyframes nx-mini-quad { from { opacity: 0; transform: translateY(8px) scale(0.98); } }
 .nx-mini-quad h3 { display: flex; align-items: center; gap: 6px; padding: 0 4px 6px; font-size: 12px; font-weight: 700; color: var(--c); }

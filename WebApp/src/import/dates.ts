@@ -41,6 +41,9 @@ const RE_MON_D_Y = new RegExp(
   `^([a-z]+)\\.?[\\s\\-/.]*(\\d{1,2})(?:st|nd|rd|th)?(?:,\\s*|[\\s\\-/.]+)(\\d{4}|\\d{2})${TAIL}`,
   'i'
 );
+// No year ("24th Sep", "Sep 24", "24 sept"): the whole cell, so longer text isn't misread.
+const RE_D_MON = /^(\d{1,2})(?:st|nd|rd|th)?(?:\s+of)?[\s\-/.]*([a-z]+)\.?$/i;
+const RE_MON_D = /^([a-z]+)\.?[\s\-/.]*(\d{1,2})(?:st|nd|rd|th)?$/i;
 const RE_WEEKDAY = /^(?:[a-z]+day|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\.?,?\s+/i;
 const HEADER_HINT = /date|due|deadline|expir|renew|filing|until|valid|dob|birthday|anniversary/i;
 
@@ -96,7 +99,27 @@ function numericDate(a: number, b: number, y: number, dayFirst: boolean): string
   return dayFirst ? isoFromParts(y, a, b) : isoFromParts(y, b, a);
 }
 
-export function parseDateString(input: string, dayFirst = true): string | null {
+/**
+ * A day and month without a year: the year that puts it closest to [today] (so in September,
+ * "24th Sep" is this September and "2nd Jan" is next January).
+ */
+function nearestYear(mon: number, day: number, today: number): string | null {
+  const y = new Date(today).getUTCFullYear();
+  let best: string | null = null;
+  let gap = Infinity;
+  for (const cy of [y - 1, y, y + 1]) {
+    const iso = isoFromParts(cy, mon, day);
+    if (!iso) continue;
+    const d = Math.abs(Date.parse(`${iso}T00:00:00Z`) - today);
+    if (d < gap) {
+      gap = d;
+      best = iso;
+    }
+  }
+  return best;
+}
+
+export function parseDateString(input: string, dayFirst = true, today = Date.now()): string | null {
   let s = input.trim();
   if (!s) return null;
   s = s.replace(RE_WEEKDAY, '');
@@ -120,6 +143,16 @@ export function parseDateString(input: string, dayFirst = true): string | null {
   if (m) {
     const mon = monthNumber(m[1]);
     if (mon) return isoFromParts(fullYear(m[3]), mon, Number(m[2]));
+  }
+  m = RE_D_MON.exec(s);
+  if (m) {
+    const mon = monthNumber(m[2]);
+    if (mon) return nearestYear(mon, Number(m[1]), today);
+  }
+  m = RE_MON_D.exec(s);
+  if (m) {
+    const mon = monthNumber(m[1]);
+    if (mon) return nearestYear(mon, Number(m[2]), today);
   }
   return null;
 }

@@ -1,5 +1,5 @@
 import { PUSH_WORKER_URL } from '../config';
-import { getSettings, type LinkedCalendar, type Settings } from '../settings/store';
+import { getSettings, type LinkedCalendar, type LinkedSheet, type Settings, type SheetMapping } from '../settings/store';
 
 /**
  * Scan to set up: copy linked calendars and preferences from one device to another with a QR
@@ -19,12 +19,16 @@ export type PairMode = 'send' | 'get';
 export type PairLink = { id: string; key: string; mode: PairMode };
 
 export type SetupCalendar = { name: string; url: string; color: string; enabled: boolean };
+/** A linked Google Sheet (its address and column choices); the receiver reads it itself. */
+export type SetupSheet = { name: string; sheetId: string; gid: string; mapping: SheetMapping };
 export type SetupPayload = {
   v: 1;
   /** "Chrome on Mac", shown to the receiver. */
   from: string;
   at: number;
   calendars: SetupCalendar[];
+  /** Optional (older senders leave it out). */
+  sheets?: SetupSheet[];
   prefs: Partial<Settings>;
   /** Google account to suggest when signing in on the new device. */
   account?: string;
@@ -62,6 +66,7 @@ export const SETUP_PREF_KEYS = [
 
 export const PAIR_TTL_MS = 10 * 60 * 1000;
 const MAX_CALENDARS = 30;
+const MAX_SHEETS = 20;
 
 // ─── bytes ─────────────────────────────────────────────────────────────────────
 
@@ -161,6 +166,7 @@ export function buildPayload(s: Settings = getSettings()): SetupPayload {
     from: deviceName(),
     at: Date.now(),
     calendars: s.linkedCalendars.slice(0, MAX_CALENDARS).map(({ name, url, color, enabled }) => ({ name, url, color, enabled })),
+    ...(s.linkedSheets.length ? { sheets: s.linkedSheets.slice(0, MAX_SHEETS).map(({ name, sheetId, gid, mapping }) => ({ name, sheetId, gid, mapping })) } : {}),
     prefs,
     ...(account ? { account } : {})
   };
@@ -182,6 +188,14 @@ export function cleanPayload(raw: unknown, defaults: Settings = getSettings()): 
       enabled: x.enabled !== false
     });
   }
+  const sheets: SetupSheet[] = [];
+  for (const raw of Array.isArray(o.sheets) ? o.sheets.slice(0, MAX_SHEETS) : []) {
+    const x = (raw ?? {}) as Record<string, unknown>;
+    const mapping = cleanMapping(x.mapping);
+    if (typeof x.sheetId !== 'string' || !/^[A-Za-z0-9_-]{20,}$/.test(x.sheetId) || x.sheetId.length > 100) continue;
+    if (typeof x.gid !== 'string' || !/^\d{0,12}$/.test(x.gid) || !mapping) continue;
+    sheets.push({ name: typeof x.name === 'string' && x.name.trim() ? x.name.trim().slice(0, 60) : 'Google Sheet', sheetId: x.sheetId, gid: x.gid, mapping });
+  }
   const prefs: Partial<Settings> = {};
   const inPrefs = (o.prefs && typeof o.prefs === 'object' ? o.prefs : {}) as Record<string, unknown>;
   for (const k of SETUP_PREF_KEYS) {
@@ -194,9 +208,44 @@ export function cleanPayload(raw: unknown, defaults: Settings = getSettings()): 
     from: typeof o.from === 'string' ? o.from.slice(0, 60) : 'another device',
     at: Number.isFinite(o.at) ? Number(o.at) : 0,
     calendars,
+    ...(sheets.length ? { sheets } : {}),
     prefs,
     ...(account ? { account } : {})
   };
+}
+
+const PRIORITY_NAMES = ['HIGH', 'MEDIUM', 'LOW', 'NONE'] as const;
+type P = (typeof PRIORITY_NAMES)[number];
+const colIndex = (v: unknown) => (Number.isInteger(v) && (v as number) >= 0 && (v as number) < 500 ? (v as number) : null);
+const colList = (v: unknown) => (Array.isArray(v) ? v.map(colIndex).filter((n): n is number => n !== null).slice(0, 20) : []);
+
+/** A sheet's column choices from another device: only well-formed values, else null. */
+export function cleanMapping(raw: unknown): SheetMapping | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const m = raw as Record<string, unknown>;
+  const dateCol = colIndex(m.dateCol);
+  const headerRow = Number.isInteger(m.headerRow) && (m.headerRow as number) >= -1 && (m.headerRow as number) < 1000 ? (m.headerRow as number) : null;
+  if (dateCol === null || headerRow === null) return null;
+  const titleCols = colList(m.titleCols);
+  const titleText = typeof m.titleText === 'string' ? m.titleText.trim().slice(0, 80) : '';
+  if (!titleCols.length && !titleText) return null;
+  const isP = (v: unknown): v is P => PRIORITY_NAMES.includes(v as P);
+  let priority: SheetMapping['priority'] = 'MEDIUM';
+  if (isP(m.priority)) priority = m.priority;
+  else if (m.priority && typeof m.priority === 'object') {
+    const pr = m.priority as Record<string, unknown>;
+    const col = colIndex(pr.col);
+    if (col !== null) priority = { col, ...(isP(pr.fallback) ? { fallback: pr.fallback } : {}) };
+  }
+  const offsets = Array.isArray(m.offsets) ? m.offsets.filter((n) => Number.isInteger(n) && (n as number) >= -366 && (n as number) <= 366).slice(0, 10) as number[] : [0];
+  const alertTime = Number.isInteger(m.alertTime) && (m.alertTime as number) >= 0 && (m.alertTime as number) < 1440 ? (m.alertTime as number) : 540;
+  return { headerRow, titleCols, titleText, dateCol, notesCols: colList(m.notesCols), priority, offsets, alertTime, dayFirst: m.dayFirst !== false };
+}
+
+/** Sheets in [p] that this device doesn't read yet. */
+export function newSheets(p: SetupPayload, have: LinkedSheet[]): SetupSheet[] {
+  const known = new Set(have.map((l) => `${l.sheetId}|${l.gid}`));
+  return (p.sheets ?? []).filter((x) => !known.has(`${x.sheetId}|${x.gid}`));
 }
 
 /** Calendars in the payload that this device doesn't have yet (matched by link). */

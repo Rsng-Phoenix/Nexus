@@ -11,7 +11,7 @@ const CSP = [
   "script-src 'self' https://accounts.google.com/gsi/client",
   "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style",
   "img-src 'self' data: blob: https://*.googleusercontent.com",
-  "connect-src 'self' https://www.googleapis.com https://oauth2.googleapis.com https://accounts.google.com https://nexus-push.priyanshupradhan0204.workers.dev https://raw.githubusercontent.com",
+  "connect-src 'self' https://www.googleapis.com https://oauth2.googleapis.com https://accounts.google.com https://nexus-push.priyanshupradhan0204.workers.dev https://raw.githubusercontent.com https://docs.google.com https://*.googleusercontent.com",
   'frame-src https://accounts.google.com',
   "worker-src 'self'",
   "manifest-src 'self'",

@@ -6,6 +6,7 @@ import {
   excelSerialToIso,
   firstNonEmptyRow,
   parseCellDate,
+  parseDateString,
   suggestDateColumn
 } from './dates';
 
@@ -136,5 +137,23 @@ describe('column + header detection', () => {
     const noHints: Cell[][] = rows.map((r, i) => (i === 1 ? r.map((_, j) => c(`c${j}`)) : r));
     expect(suggestDateColumn(noHints, 1)).toBe(2);
     expect(suggestDateColumn([[c('a')], [c('b')]], 0)).toBe(-1);
+  });
+});
+
+describe('dates without a year', () => {
+  const sept25 = Date.UTC(2026, 8, 25);
+  it('reads "24th Sep", "19th sep", "Sep 24" as the nearest such day', () => {
+    expect(parseDateString('24th Sep', true, sept25)).toBe('2026-09-24');
+    expect(parseDateString('19th sep', true, sept25)).toBe('2026-09-19');
+    expect(parseDateString('23rd Sep', true, sept25)).toBe('2026-09-23');
+    expect(parseDateString('Sep 24', true, sept25)).toBe('2026-09-24');
+    expect(parseDateString('1 October', true, sept25)).toBe('2026-10-01');
+    expect(parseDateString('2nd Jan', true, sept25)).toBe('2027-01-02'); // next January is nearer
+    expect(parseDateString('10th Aug', true, Date.UTC(2027, 0, 5))).toBe('2026-08-10'); // last August is nearer
+  });
+  it('still refuses text that only contains a date-like word', () => {
+    expect(parseDateString('24th Sep pending', true, sept25)).toBeNull();
+    expect(parseDateString('May', true, sept25)).toBeNull();
+    expect(parseDateString('31st Feb', true, sept25)).toBeNull();
   });
 });

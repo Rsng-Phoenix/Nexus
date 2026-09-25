@@ -34,6 +34,7 @@ import { isPc, isWide } from '../state/viewport';
 import { APP_VERSION } from '../config';
 import { downloadIcs } from './addToCalendar';
 import { FeedSettings } from './FeedSettings';
+import { LinkedSheets } from './LinkedSheets';
 import { Icon, type IconName } from './icons';
 import { miniSupported, openMiniWindow } from './MiniWindow';
 import { Avatar } from './Shell';
@@ -847,6 +848,15 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
                   else nav.open({ kind: 'sheetImport', file: f });
                 }}
               />
+              <GroupDivider />
+              <SettingsRow
+                icon="link"
+                title="Link a Google Sheet"
+                subtitle="Rows with a date become tasks and keep updating as the sheet changes"
+                tint={Green}
+                onClick={() => nav.open({ kind: 'sheetImport' })}
+              />
+              <LinkedSheets />
               <GroupDivider />
               <SettingsRow
                 icon="event"

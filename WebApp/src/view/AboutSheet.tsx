@@ -193,6 +193,10 @@ function UpdateChecker() {
 
 /** Copied from MainActivity.kt ChangelogDialog (emoji stripped). */
 const ANDROID_CHANGES = [
+  'Link a Google Sheet: its rows become tasks and keep updating as the sheet changes',
+  'Linked sheets: one title for every row (e.g. "Appointment"), dates like "24th Sep", and battery-friendly updates you control',
+  'Scan to set up now brings your linked Google Sheets to the other device too',
+  'Sheet import keeps every reason when rows share a title and date',
   'Linked calendars now reach all your devices when you are signed in: add, rename or remove one once and your other devices follow',
   'Show Nexus in Google, Apple or Outlook Calendar: a live link that updates as you add, change or finish tasks',
   'Clash radar: meetings that overlap across your linked calendars are flagged, with a clash note in meeting alerts',
@@ -232,6 +236,11 @@ const ANDROID_CHANGES = [
 ];
 
 const WEB_CHANGES = [
+  'Link a Google Sheet: its rows become tasks and keep updating as the sheet changes (your ticks and edits stay)',
+  'Linked sheets: one title for every row (e.g. "Appointment"), dates like "24th Sep", uploaded Excel files in Google Drive, and a "Only when I tap Update" choice to save battery',
+  'Scan to set up now brings your linked Google Sheets to the other device too',
+  'Sheet import keeps every reason when rows share a title and date, instead of dropping the extra rows',
+  'Nexus Desk: no more keychain password prompts, and the matrix follows the window size straight away',
   'Linked calendars now reach all your devices (phone, other browsers, Nexus Desk) when you are signed in',
   'Nexus Desk for Mac loads linked calendars itself, no notifications needed',
   'Show Nexus in Google, Apple or Outlook Calendar: a live link that updates as you add, change or finish tasks',

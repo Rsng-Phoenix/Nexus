@@ -53,6 +53,61 @@ describe('buildImportPlan', () => {
     [c('Eps'), c('Board'), c('2026-10-09'), c('whatever'), c(true)]
   ];
 
+  it('rows with the same title and date keep every reason (one task, notes combined)', async () => {
+    const sheet: Cell[][] = [
+      [c('Task'), c('Due'), c('Reason'), c('Priority')],
+      [c('RTO follow-up'), c('2026-10-05'), c('Customer not home'), c('Low')],
+      [c('RTO follow-up'), c('2026-10-05'), c('Wrong address'), c('High')],
+      [c('RTO follow-up'), c('2026-10-05'), c('Customer not home'), c('Low')], // exact repeat: nothing new
+      [c('RTO follow-up'), c('2026-10-06'), c('Refused'), c('Low')] // other date: its own task
+    ];
+    const plan = await buildImportPlan({
+      fileName: 'rto.csv',
+      sheetName: '',
+      rows: sheet,
+      headerRow: 0,
+      titleCols: [0],
+      dateCol: 1,
+      notesCols: [2],
+      priority: { col: 3 },
+      offsets: [0]
+    });
+    expect(plan.duplicates).toBe(2);
+    expect(plan.items.map((i) => [i.dueDate, i.priority, i.notes])).toEqual([
+      ['2026-10-05', 'HIGH', 'Reason: Customer not home\nReason: Wrong address'],
+      ['2026-10-06', 'LOW', 'Reason: Refused']
+    ]);
+  });
+
+  it('the same title for every row: one "Appointment" task per day listing that day’s rows', async () => {
+    const sheet: Cell[][] = [
+      [c('PO Number'), c('To Location'), c('Appointment'), c('Status')],
+      [c('PO-1'), c('Bhiwandi'), c('11-08-2026'), c('Delivered')],
+      [c('PO-2'), c('Pune'), c('11-08-2026'), c('Delivered')],
+      [c('PO-3'), c('Bhiwandi'), c('15-08-2026'), c('Pending')],
+      [c('PO-4'), c('Delhi'), c(null), c('Pending')] // no appointment yet: skipped, not an error in the sheet
+    ];
+    const plan = await buildImportPlan({
+      fileName: 'gsheet:x',
+      sheetName: '',
+      rows: sheet,
+      headerRow: 0,
+      titleCols: [],
+      titleText: '  Appointment ',
+      dateCol: 2,
+      notesCols: [0, 1],
+      priority: 'MEDIUM',
+      offsets: [0],
+      dayFirst: true
+    });
+    expect(plan.items.map((i) => [i.description, i.dueDate, i.notes])).toEqual([
+      ['Appointment', '2026-08-11', 'PO Number: PO-1\nTo Location: Bhiwandi\nPO Number: PO-2\nTo Location: Pune'],
+      ['Appointment', '2026-08-15', 'PO Number: PO-3\nTo Location: Bhiwandi']
+    ]);
+    expect(plan.duplicates).toBe(1);
+    expect(plan.invalid).toEqual([{ rowIndex: 4, reason: 'No date' }]);
+  });
+
   it('builds items, invalid rows and duplicate count', async () => {
     const plan = await buildImportPlan({
       fileName: 'Filings.xlsx',
