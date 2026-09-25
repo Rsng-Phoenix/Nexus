@@ -71,7 +71,7 @@ export function LinkedCalendarsSheet(p: LayerProps) {
           See your Google, iCloud, Zoho or Outlook events next to your tasks, each labelled with where it came from. Nexus reads the calendar's
           private iCal link — the same way Apple Calendar and Outlook subscribe to calendars. Nexus checks it every{' '}
           {refreshLabel(settingsSig.value.calendarRefreshMinutes)} and whenever you open it; meeting links get a Join button. Read-only: Nexus never
-          changes your events. The link stays on this device.
+          changes your events. Signed in, your links reach your other devices (phone, other browsers, Nexus Desk) on their next sync.
         </p>
 
         {registered === false && (

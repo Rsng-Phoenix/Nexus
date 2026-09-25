@@ -22,6 +22,7 @@ import { clearRefreshToken, commitRefreshToken, completeRedirectSignIn, hasRefre
 import { showDriveScopePrompt } from '../ui/drive-scope-prompt';
 import { deleteFile, DriveError, findBackup, uploadBackup } from './drive';
 import { syncFeedCreds } from '../calendar/feed';
+import { syncLinkedCalendars } from '../calendar/linkedSync';
 import { countActiveRemovals, mergeTasks } from './merge';
 import { ensureDriveToken, signInWithDriveScope } from './sign-in-drive';
 
@@ -413,6 +414,8 @@ async function syncOnce(background: boolean): Promise<SyncResult> {
   patchSettings({ driveFileId: fileId, lastSuccessTime: done, ownerSyncedAt: done, lastSyncError: '' });
   // Live calendar feed: agree on one feed with your other devices, then refresh it if tasks changed.
   await syncFeedCreds(token).catch(() => {});
+  // Linked calendars: the same links on every device.
+  await syncLinkedCalendars(token).catch(() => {});
   const pulled = merge.downloaded > 0 ? ` · ${merge.downloaded} from Drive` : '';
   return { ok: true, message: `Synced${pulled}` };
 }

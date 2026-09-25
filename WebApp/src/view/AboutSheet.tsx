@@ -231,6 +231,8 @@ const ANDROID_CHANGES = [
 ];
 
 const WEB_CHANGES = [
+  'Linked calendars now reach all your devices (phone, other browsers, Nexus Desk) when you are signed in',
+  'Nexus Desk for Mac loads linked calendars itself, no notifications needed',
   'Show Nexus in Google, Apple or Outlook Calendar: a live link that updates as you add, change or finish tasks',
   'Clash radar: meetings that overlap across your linked calendars are flagged',
   'Scan to set up: copy linked calendars and settings to another device with a QR code',
