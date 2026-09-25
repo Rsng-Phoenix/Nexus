@@ -1,7 +1,8 @@
-import { refreshSheet, sheetBusy, sheetOpenUrl, unlinkSheet } from '../import/liveSheet';
+import { refreshSheet, sheetBusy, sheetOpenUrl, unlinkSheet, upcomingSheetTasks } from '../import/liveSheet';
 import { patchSettings, settingsSig, SHEET_REFRESH_CHOICES, sheetRefreshLabel } from '../settings/store';
 import { askChoice } from '../state/prompts';
-import { showSnack } from '../state/toasts';
+import { restoreTasks } from '../state/store';
+import { offerUndo, showSnack } from '../state/toasts';
 import { Icon } from './icons';
 import { Stepper } from './kit';
 
@@ -24,15 +25,22 @@ export function LinkedSheets() {
     showSnack(parts.length ? parts.join(' · ') : 'Already up to date');
   };
   const stop = async (id: string, name: string) => {
+    const upcoming = (await upcomingSheetTasks(id)).length;
     const ok = await askChoice({
       title: `Stop updating from “${name}”?`,
-      body: 'The tasks it already made stay in Nexus. New rows in the sheet won’t be added any more.',
-      options: [{ id: 'stop', label: 'Stop updating', tone: 'danger' }],
-      cancelLabel: 'Keep it'
+      body: upcoming
+        ? `It made ${upcoming} upcoming task${upcoming === 1 ? '' : 's'} (today or later, not done). Remove them too, or keep them? Past and finished tasks always stay.`
+        : 'New rows in the sheet won’t be added any more. Its tasks are all past or done, so they stay.',
+      options: [
+        ...(upcoming ? [{ id: 'remove', label: `Stop and remove ${upcoming} upcoming`, tone: 'danger' as const }] : []),
+        { id: 'keep', label: upcoming ? 'Stop, keep its tasks' : 'Stop updating', tone: upcoming ? ('plain' as const) : ('danger' as const) }
+      ],
+      cancelLabel: 'Keep linked'
     });
-    if (ok !== 'stop') return;
-    await unlinkSheet(id);
-    showSnack('Sheet unlinked · its tasks stay');
+    if (ok !== 'remove' && ok !== 'keep') return;
+    const removed = await unlinkSheet(id, ok === 'remove');
+    if (removed.length) offerUndo(`Unlinked · ${removed.length} upcoming task${removed.length === 1 ? '' : 's'} removed`, () => void restoreTasks(removed));
+    else showSnack('Sheet unlinked · its tasks stay');
   };
 
   return (

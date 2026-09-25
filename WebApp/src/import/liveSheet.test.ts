@@ -28,6 +28,7 @@ vi.mock('../state/store', () => ({
     }
     return { added, updated, skipped: 0, undo: async () => {} };
   },
+  restoreTasks: async () => {},
   deleteTasks: async (ids: number[]) => {
     for (const t of tasks) if (ids.includes(t.id)) Object.assign(t, { deletedAt: tick(), updatedAt: clock });
   }
@@ -36,7 +37,7 @@ let settings = { linkedSheets: [] as unknown[], sheetRefreshMinutes: 15 };
 vi.mock('../settings/store', () => ({ getSettings: () => settings, patchSettings: (p: object) => void (settings = { ...settings, ...p }) }));
 
 import { csvRowsToCells } from './csv';
-import { applySheet, fetchSheetRows, parseSheetUrl, sheetCsvUrl } from './liveSheet';
+import { applySheet, fetchSheetRows, parseSheetUrl, sheetCsvUrl, unlinkSheet, upcomingSheetTasks } from './liveSheet';
 
 const cells = (rows: string[][]) => csvRowsToCells(rows);
 const link = {
@@ -138,5 +139,35 @@ describe('a linked sheet keeps its tasks up to date', () => {
     Object.assign(byTitle('Pay GST')!, { deletedAt: tick(), updatedAt: clock });
     expect(await applySheet({ ...link, mapping: { ...link.mapping, notesCols: [] } }, v)).toEqual({ added: 0, updated: 0, removed: 0 });
     expect(byTitle('Pay GST')).toBeUndefined();
+  });
+
+  it('unlinking can remove the upcoming tasks only: past and finished ones stay', async () => {
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    try {
+      const sheet = cells([
+        ['Task', 'Due', 'Reason'],
+        ['Past appointment', '2020-01-10', ''],
+        ['Future appointment', '2099-01-10', ''],
+        ['Future but done', '2099-02-10', ''],
+        ['Another future', '2099-03-10', '']
+      ]);
+      await applySheet(link, sheet);
+      Object.assign(byTitle('Future but done')!, { isCompleted: true, updatedAt: tick() });
+      expect((await upcomingSheetTasks(link.id)).map((t) => t.description).sort()).toEqual(['Another future', 'Future appointment']);
+      const removed = await unlinkSheet(link.id, true);
+      expect(removed).toHaveLength(2);
+      expect(byTitle('Past appointment')).toBeDefined();
+      expect(byTitle('Future but done')).toBeDefined();
+      expect(byTitle('Future appointment')).toBeUndefined();
+      expect(await upcomingSheetTasks(link.id)).toEqual([]); // the link and its memory are gone
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('unlinking without removing keeps every task', async () => {
+    await applySheet(link, cells([['Task', 'Due', 'Reason'], ['Future appointment', '2099-01-10', '']]));
+    expect(await unlinkSheet(link.id)).toEqual([]);
+    expect(byTitle('Future appointment')).toBeDefined();
   });
 });
