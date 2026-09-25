@@ -23,3 +23,11 @@ CREATE TABLE IF NOT EXISTS pairs (
   blob TEXT NOT NULL,
   expires_at INTEGER NOT NULL
 );
+-- "Show Nexus in your calendar apps": opt-in iCal feeds. id = SHA-256 of the secret address;
+-- key_hash = SHA-256 of the write key held by the user's devices.
+CREATE TABLE IF NOT EXISTS feeds (
+  id TEXT PRIMARY KEY,
+  key_hash TEXT NOT NULL,
+  ics TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);

@@ -193,6 +193,10 @@ function UpdateChecker() {
 
 /** Copied from MainActivity.kt ChangelogDialog (emoji stripped). */
 const ANDROID_CHANGES = [
+  'Show Nexus in Google, Apple or Outlook Calendar: a live link that updates as you add, change or finish tasks',
+  'Clash radar: meetings that overlap across your linked calendars are flagged, with a clash note in meeting alerts',
+  'Scan to set up: copy linked calendars and settings to another device with a QR code (encrypted end to end)',
+  'Moved or cancelled single meetings in a recurring series now show correctly',
   'Deadlines: pick a due day and get alerts days before, on the day or after',
   'A calendar with your deadlines, reminders and linked Google / iCloud / Zoho / Outlook calendars',
   'Every calendar item says where it is from (Nexus, Google, iCloud, Zoho, Outlook); tap a calendar in the legend to hide it',
@@ -227,6 +231,11 @@ const ANDROID_CHANGES = [
 ];
 
 const WEB_CHANGES = [
+  'Show Nexus in Google, Apple or Outlook Calendar: a live link that updates as you add, change or finish tasks',
+  'Clash radar: meetings that overlap across your linked calendars are flagged',
+  'Scan to set up: copy linked calendars and settings to another device with a QR code',
+  'Nexus Desk: a calendar view, open a task to rename it, tick its checklist, move it or set a deadline; optional separate calendar window',
+  'Nexus Desk for Mac uses no power while waiting for the hot corner',
   'Stays signed in to Google Drive (no more hourly sign-in)',
   'Mini window that stays on top of every app (Chrome, Edge, Brave)',
   'On a computer: press Enter anywhere for a new task',

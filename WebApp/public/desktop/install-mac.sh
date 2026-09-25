@@ -56,7 +56,10 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 say "Downloading Nexus Desk…"
-curl -fsSL "${NEXUS_URL}desktop/nexus-desk-mac.jxa" -o "$TMP/desk.jxa"
+# NEXUS_DESK_SCRIPT=/path/to/nexus-desk-mac.jxa installs a local copy (for development).
+if [ -n "${NEXUS_DESK_SCRIPT:-}" ]; then cp "$NEXUS_DESK_SCRIPT" "$TMP/desk.jxa"; else
+  curl -fsSL "${NEXUS_URL}desktop/nexus-desk-mac.jxa" -o "$TMP/desk.jxa"
+fi
 curl -fsSL "${NEXUS_URL}icons/icon-512.png" -o "$TMP/icon.png" || true
 # Sanity check: it must be the Nexus Desk script, not an error page.
 grep -q "Nexus Desk for Mac" "$TMP/desk.jxa" || { echo "Download failed (unexpected content)." >&2; exit 1; }

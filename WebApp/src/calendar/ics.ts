@@ -328,6 +328,22 @@ export function exportIcs(tasks: IcsExportTask[], opts: IcsExportOptions): strin
         'END:VALARM',
         'END:VEVENT'
       );
+    } else if (t.reminderTime != null) {
+      // All-day and date-range reminders (they repeat through the day in Nexus itself): one
+      // all-day event over those days, shown as free so it never blocks time.
+      const first = localIsoDate(t.reminderTime);
+      const endMs = t.reminderEndDate ?? 0;
+      const last = endMs > 0 ? localIsoDate(endMs) : first;
+      lines.push(
+        'BEGIN:VEVENT',
+        `UID:${t.taskUuid}-r@nexus`,
+        `DTSTAMP:${stamp}`,
+        `DTSTART;VALUE=DATE:${icsDate(first)}`,
+        `DTEND;VALUE=DATE:${icsDate(addDaysIso(last < first ? first : last, 1))}`,
+        `SUMMARY:${summary}`
+      );
+      if (notes) lines.push(`DESCRIPTION:${escapeText(notes)}`);
+      lines.push('TRANSP:TRANSPARENT', 'END:VEVENT');
     }
   }
   lines.push('END:VCALENDAR');

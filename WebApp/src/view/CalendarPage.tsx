@@ -196,7 +196,8 @@ export function CalendarPage(p: LayerProps) {
               trigger={(toggle) => <IconButton icon="moreVert" label="Calendar options" onClick={toggle} />}
               items={[
                 { label: 'Import .ics / Excel / CSV', icon: 'upload', onSelect: () => fileInput.current?.click() },
-                { label: 'Export to calendar (.ics)', icon: 'download', onSelect: exportAll },
+                { label: 'Show in Google, Apple or Outlook (live)', icon: 'event', onSelect: () => nav.open({ kind: 'settings', cat: 'calendar' }) },
+                { label: 'Export a copy (.ics file)', icon: 'download', onSelect: exportAll },
                 'divider',
                 { label: 'Linked calendars', icon: 'link', onSelect: () => nav.open({ kind: 'calendars' }) },
                 ...(s.linkedCalendars.length ? [{ label: 'Refresh linked calendars', icon: 'sync' as const, onSelect: () => void refreshLinked(true) }] : [])

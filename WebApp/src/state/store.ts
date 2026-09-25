@@ -74,9 +74,23 @@ let afterWriteHooks: Array<() => void> = [];
 export function onTasksWritten(fn: () => void): void {
   afterWriteHooks.push(fn);
 }
+/**
+ * Other Nexus windows on this device (a second tab, the mini window, both Nexus Desk windows)
+ * reload at once when tasks change here, instead of waiting for the next sync.
+ */
+const peers = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('nexus-tasks') : null;
+let peerTimer = 0;
+if (peers) {
+  peers.onmessage = () => {
+    clearTimeout(peerTimer);
+    peerTimer = window.setTimeout(() => void reload(), 150);
+  };
+}
+
 function afterWrite(): void {
   scheduleSync();
   afterWriteHooks.forEach((f) => f());
+  peers?.postMessage(1);
 }
 
 const now = () => Date.now();
