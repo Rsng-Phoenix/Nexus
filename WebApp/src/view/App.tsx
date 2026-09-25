@@ -148,7 +148,7 @@ function LayerView({ entry, leaving }: { entry: LayerEntry; leaving: boolean }) 
     case 'detail':
       return <TaskDetailSheet {...p} taskId={entry.taskId} />;
     case 'full':
-      return <FullScreenQuadrant {...p} priority={entry.priority} />;
+      return <FullScreenQuadrant {...p} priority={entry.priority} folder={entry.folder} />;
     case 'settings':
       return <SettingsPage {...p} cat={entry.cat} />;
     case 'vault':

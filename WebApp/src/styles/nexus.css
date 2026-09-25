@@ -85,6 +85,20 @@ input, textarea { font: inherit; color: inherit; }
 .nx-count { display: inline-flex; overflow: hidden; border-radius: 8px; padding: 1px 5px; font-size: 9px; font-weight: 700; line-height: 1.4; }
 .nx-quad-list { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 4px 6px 8px; display: flex; flex-direction: column; gap: 4px; scrollbar-width: none; overscroll-behavior: contain; }
 .nx-quad-list::-webkit-scrollbar { display: none; }
+.nx-quad-list > .nx-folder-row { position: sticky; bottom: 0; z-index: 1; background: color-mix(in srgb, var(--c, var(--nx-textSec)) 10%, var(--nx-surface, #11111b)); }
+.nx-folder-row { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 34px; margin-top: 2px; padding: 4px 8px; border-radius: 10px; border: 1px dashed color-mix(in srgb, var(--c, var(--nx-textSec)) 45%, transparent); background: color-mix(in srgb, var(--c, var(--nx-textSec)) 7%, transparent); color: var(--nx-textPri); text-align: left; cursor: pointer; flex-shrink: 0; }
+.nx-folder-row .ic { color: var(--c, var(--nx-textSec)); flex-shrink: 0; }
+.nx-folder-row .title { font-size: 12px; font-weight: 600; }
+.nx-folder-row .sub { flex: 1; min-width: 0; font-size: 11px; color: var(--nx-textSec); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nx-folder-row.late .sub { color: #FF4060; }
+.nx-folder-row .chev { color: var(--nx-textSec); flex-shrink: 0; }
+.nx-folder-row:hover { filter: brightness(1.15); } .nx-folder-row.x { background: color-mix(in srgb, var(--c, var(--nx-textSec)) 13%, transparent); }
+.nx-fs-folder { padding: 10px 0 2px; }
+.nx-fs-folder .nx-folder-row { min-height: 48px; border-radius: 14px; padding: 8px 14px; }
+.nx-fs-folder .nx-folder-row .title { font-size: 14px; }
+.nx-fs-folder .nx-folder-row .sub { font-size: 13px; }
+.nx-folder-note { font-size: 12px; line-height: 1.45; color: var(--nx-textSec); margin: 4px 2px 6px; }
+.nx-folder-head { width: 100%; text-align: left; background: none; border: 0; color: inherit; cursor: pointer; }
 .nx-quad-empty { flex: 1; display: grid; place-items: center; font-size: 11px; color: color-mix(in srgb, var(--nx-textSec) 50%, transparent); transition: color 150ms; pointer-events: none; }
 .nx-quad.drop .nx-quad-empty { color: var(--c); font-weight: 600; }
 

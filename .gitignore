@@ -2,3 +2,14 @@ node_modules
 dist
 .DS_Store
 *.local
+
+# Never commit secrets or signing keys
+.env
+.env.*
+.dev.vars
+.wrangler
+local.properties
+*.jks
+*.keystore
+*.p12
+*.pem

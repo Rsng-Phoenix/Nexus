@@ -193,6 +193,9 @@ function UpdateChecker() {
 
 /** Copied from MainActivity.kt ChangelogDialog (emoji stripped). */
 const ANDROID_CHANGES = [
+  "Reliable reminders: one tap in Settings so the phone's battery saver can't stop your reminders",
+  'Imported tasks now wait in an Imported folder inside each quadrant; only the ones due today step onto the matrix. Their reminders still ring on time',
+  'One version everywhere: web, Nexus Desk and Android are all 4.0',
   'Share, redesigned: chat-ready text, a branded image card, and multi-page PDFs with selectable text in any language',
   'Link a Google Sheet: its rows become tasks and keep updating as the sheet changes',
   'Linked sheets: one title for every row (e.g. "Appointment"), dates like "24th Sep", and battery-friendly updates you control',
@@ -239,6 +242,8 @@ const ANDROID_CHANGES = [
 ];
 
 const WEB_CHANGES = [
+  'Imported tasks now wait in an Imported folder inside each quadrant; only the ones due today step onto the matrix. Their reminders still ring on time',
+  'One version everywhere: web, Nexus Desk and Android are all 4.0',
   'Share, redesigned: chat-ready text with dates and ☐ checklist, a branded image card, and proper multi-page PDFs in any language',
   'Link a Google Sheet: its rows become tasks and keep updating as the sheet changes (your ticks and edits stay)',
   'Linked sheets: one title for every row (e.g. "Appointment"), dates like "24th Sep", uploaded Excel files in Google Drive, and a "Only when I tap Update" choice to save battery',
