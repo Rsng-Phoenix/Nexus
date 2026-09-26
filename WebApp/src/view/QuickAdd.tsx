@@ -1,6 +1,7 @@
 import type { JSX } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { haptic } from '../lib/haptics';
+import { pickerKey } from '../lib/pickerKeys';
 import * as nav from '../state/nav';
 import { byPriority } from '../state/store';
 import type { Priority } from '../types';
@@ -51,29 +52,16 @@ export function PriorityPicker({ leaving, onExited, onDismiss }: LayerProps) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (chosen.current || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
-      const sel = selRef.current;
-      const i = PRIORITIES.indexOf(sel);
-      const move: Record<string, number> = { ArrowLeft: i % 2 ? -1 : 0, ArrowRight: i % 2 ? 0 : 1, ArrowUp: i > 1 ? -2 : 0, ArrowDown: i > 1 ? 0 : 2 };
-      if (e.key in move) {
-        e.preventDefault();
-        if (move[e.key]) {
-          haptic('DRAG_TICK');
-          setSel(PRIORITIES[i + move[e.key]]);
-        }
-      } else if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        choose(sel);
-      } else if (/^[1-4]$/.test(e.key)) {
-        e.preventDefault();
-        choose(PRIORITIES[Number(e.key) - 1]);
-      } else if (e.key === 'Tab') {
-        e.preventDefault();
-        setSel(PRIORITIES[(i + (e.shiftKey ? 3 : 1)) % 4]);
-      } else if (e.key.length === 1 && !e.isComposing) {
-        // Typing straight away adds to the highlighted priority, keeping the keystroke.
-        e.preventDefault();
-        choose(sel, e.key);
+      if (chosen.current) return;
+      // Same rules as the widget's composer (lib/pickerKeys.ts). Typing straight away adds to
+      // the highlighted priority, keeping the keystroke.
+      const a = pickerKey(e, selRef.current);
+      if (!a) return;
+      e.preventDefault();
+      if (a.type === 'choose') choose(a.priority, a.text);
+      else if (a.priority !== selRef.current) {
+        haptic('DRAG_TICK');
+        setSel(a.priority);
       }
     };
     window.addEventListener('keydown', onKey);

@@ -16,7 +16,7 @@ import { notesToolbar, renderNotesEditor } from '../ui/notes';
 import { addTaskToCalendar } from './addToCalendar';
 import { Icon } from './icons';
 import { Checkbox, Menu, type MenuItem } from './kit';
-import { animate, BOUNCY, EXIT, STANDARD } from './motion';
+import { EXIT, play, SPRING_ENTER, SPRING_MOVE } from './motion';
 
 /**
  * Task sheet: opens at 57% height, drag up (> 80px) or focus the keyboard to expand to full,
@@ -90,19 +90,19 @@ export function TaskDetailSheet({ id, taskId, leaving, onExited }: {
     const el = panel.current;
     if (!el) return;
     if (desktop) {
-      animate(el, [{ transform: 'scale(0.96)', opacity: 0 }, { transform: 'none', opacity: 1 }], { duration: 260, easing: 'cubic-bezier(0.2,0,0,1)' });
+      play(el, [{ transform: 'scale(0.96)', opacity: 0 }, { transform: 'none', opacity: 1 }], SPRING_ENTER, 'presence');
     } else {
-      animate(el, [{ transform: 'translateY(50%)', opacity: 0 }, { transform: 'none', opacity: 1 }], { duration: 340, easing: 'cubic-bezier(0.2,0,0,1)' });
+      play(el, [{ transform: 'translateY(50%)', opacity: 0 }, { transform: 'none', opacity: 1 }], SPRING_ENTER, 'presence');
     }
-    animate(shade.current, [{ opacity: 0 }, { opacity: 1 }], { duration: 180, easing: 'linear' });
+    play(shade.current, [{ opacity: 0 }, { opacity: 1 }], { duration: 180, easing: 'linear' }, 'presence');
   }, []);
   useLayoutEffect(() => {
     if (!leaving) return;
     const el = panel.current;
     const a = desktop
-      ? animate(el, [{ transform: 'none', opacity: 1 }, { transform: 'scale(0.97)', opacity: 0 }], { duration: 180, easing: STANDARD })
-      : animate(el, [{ transform: getComputedStyle(el!).transform === 'none' ? 'none' : getComputedStyle(el!).transform, opacity: 1 }, { transform: 'translateY(60%)', opacity: 0 }], { duration: 240, easing: STANDARD });
-    animate(shade.current, [{ opacity: 1 }, { opacity: 0 }], { duration: 200, easing: 'linear' });
+      ? play(el, [{ transform: 'none', opacity: 1 }, { transform: 'scale(0.97)', opacity: 0 }], EXIT, 'presence')
+      : play(el, [{ transform: getComputedStyle(el!).transform === 'none' ? 'none' : getComputedStyle(el!).transform, opacity: 1 }, { transform: 'translateY(60%)', opacity: 0 }], { ...EXIT, duration: 200 }, 'presence');
+    play(shade.current, [{ opacity: 1 }, { opacity: 0 }], { duration: 200, easing: 'linear' }, 'presence');
     if (a) a.onfinish = onExited;
     else onExited();
   }, [leaving]);
@@ -135,7 +135,7 @@ export function TaskDetailSheet({ id, taskId, leaving, onExited }: {
           if (d.dy < -80 * 0.65) setExpanded(true);
           const from = el.style.transform;
           el.style.transform = '';
-          if (from) animate(el, [{ transform: from }, { transform: 'none' }], { duration: 320, easing: BOUNCY, fill: 'none' });
+          if (from) play(el, [{ transform: from }, { transform: 'none' }], { ...SPRING_MOVE, fill: 'none' }, 'presence');
         }
       };
 

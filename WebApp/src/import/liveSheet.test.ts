@@ -33,14 +33,32 @@ vi.mock('../state/store', () => ({
     for (const t of tasks) if (ids.includes(t.id)) Object.assign(t, { deletedAt: tick(), updatedAt: clock });
   }
 }));
-let settings = { linkedSheets: [] as unknown[], sheetRefreshMinutes: 15, sheetLateAlerts: true, notifyDeadlines: true };
+let settings = { linkedSheets: [] as unknown[], sheetRefreshMinutes: 15, sheetLateAlerts: true, notifyDeadlines: true, googleEmail: '' };
 const snoozes: { ref: string; kind: string; fireAt: number }[] = [];
 vi.mock('../reminders/notify', () => ({ addSnooze: async (z: { ref: string; kind: string; fireAt: number }) => void snoozes.push(z) }));
 vi.mock('../reminders/push', () => ({ scheduleAll: async () => {} }));
-vi.mock('../settings/store', () => ({ getSettings: () => settings, patchSettings: (p: object) => void (settings = { ...settings, ...p }) }));
+vi.mock('../settings/store', () => ({
+  getSettings: () => settings,
+  patchSettings: (p: object) => void (settings = { ...settings, ...p }),
+  isSignedIn: () => !!settings.googleEmail
+}));
+// The Drive-synced links file (linkedSheetsSync.ts) only records what happened here.
+const marks: string[] = [];
+vi.mock('./linkedSheetsSync', () => ({
+  markSheetUpdated: async (r: { sheetId: string; gid: string }) => void marks.push(`+${r.sheetId}#${r.gid}`),
+  markSheetRemoved: async (r: { sheetId: string; gid: string }) => void marks.push(`-${r.sheetId}#${r.gid}`)
+}));
+let pickerKey = true;
+vi.mock('./picker', () => ({ pickerAvailable: () => pickerKey }));
+let token: string | null = 'tok';
+vi.mock('../sync/auth', () => ({
+  getAccessToken: async () => token,
+  clearToken: () => {},
+  isDriveScopeError: (m: string) => /insufficient/i.test(m)
+}));
 
 import { csvRowsToCells } from './csv';
-import { applySheet, fetchSheetRows, lateAlerts, parseSheetUrl, sheetCsvUrl, unlinkSheet, upcomingSheetTasks } from './liveSheet';
+import { applySheet, fetchSheetRows, lateAlerts, linkSheet, parseSheetUrl, SHEET_PICK_MESSAGE, SHEET_PRIVATE_MESSAGE, SheetError, sheetCsvUrl, unlinkSheet, upcomingSheetTasks } from './liveSheet';
 
 const cells = (rows: string[][]) => csvRowsToCells(rows);
 const link = {
@@ -81,6 +99,67 @@ describe('fetchSheetRows', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('Task,Due\nA,2026-10-05\n', { status: 200, headers: { 'content-type': 'text/csv' } })));
     const rows = await fetchSheetRows({ sheetId: link.sheetId, gid: '0' });
     expect(rows).toHaveLength(2);
+  });
+
+  // A private sheet: Google's sign-in page from the export; the Sheets API with the account instead.
+  const html = () => new Response('<html>Sign in</html>', { status: 200, headers: { 'content-type': 'text/html' } });
+  const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { status });
+  const route = (api: (url: string) => Response) =>
+    vi.fn(async (url: string) => (url.startsWith('https://docs.google.com/') ? html() : api(url)));
+  const META = { sheets: [{ properties: { sheetId: 0, title: 'Tab' } }] };
+
+  it('a private sheet is read through the Sheets API when signed in', async () => {
+    settings = { ...settings, googleEmail: 'me@example.com' };
+    const f = route((url) => (/\/values\//.test(url) ? json({ values: [['Task', 'Due'], ['A', '2026-10-05']] }) : json(META)));
+    vi.stubGlobal('fetch', f);
+    const rows = await fetchSheetRows({ sheetId: link.sheetId, gid: '0' });
+    expect(rows).toEqual([[{ v: 'Task' }, { v: 'Due' }], [{ v: 'A' }, { v: '2026-10-05' }]]);
+    expect(f.mock.calls.map((c) => String(c[0]))).toHaveLength(3); // export, tabs, values
+  });
+
+  it('not signed in, or no token: the sharing message as before, and the API is never called', async () => {
+    settings = { ...settings, googleEmail: '' };
+    const f = route(() => json(META));
+    vi.stubGlobal('fetch', f);
+    await expect(fetchSheetRows({ sheetId: link.sheetId, gid: '0' })).rejects.toThrow(SHEET_PRIVATE_MESSAGE);
+    expect(f).toHaveBeenCalledTimes(1);
+    settings = { ...settings, googleEmail: 'me@example.com' };
+    token = null;
+    await expect(fetchSheetRows({ sheetId: link.sheetId, gid: '0' })).rejects.toThrow(SHEET_PRIVATE_MESSAGE);
+    expect(f).toHaveBeenCalledTimes(2);
+    token = 'tok';
+  });
+
+  it('the account may not read it yet: asks for the Picker (needsPick), or for sharing when there is no Picker key', async () => {
+    settings = { ...settings, googleEmail: 'me@example.com' };
+    vi.stubGlobal('fetch', route(() => json({ error: { code: 403, status: 'PERMISSION_DENIED', message: 'The caller does not have permission' } }, 403)));
+    const e = await fetchSheetRows({ sheetId: link.sheetId, gid: '0' }).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(SheetError);
+    expect(e).toMatchObject({ message: SHEET_PICK_MESSAGE, needsPick: true, privateSheet: true });
+    pickerKey = false;
+    const e2 = await fetchSheetRows({ sheetId: link.sheetId, gid: '0' }).catch((x: unknown) => x);
+    expect(e2).toMatchObject({ message: SHEET_PRIVATE_MESSAGE, needsPick: true });
+    pickerKey = true;
+  });
+
+  it('other API errors keep their own wording', async () => {
+    settings = { ...settings, googleEmail: 'me@example.com' };
+    vi.stubGlobal('fetch', route(() => json({ error: { code: 404 } }, 404)));
+    await expect(fetchSheetRows({ sheetId: link.sheetId, gid: '0' })).rejects.toThrow(/not found/);
+  });
+});
+
+describe('links reach the other devices', () => {
+  it('linking and unlinking record the change for linkedSheetsSync', async () => {
+    tasks = [];
+    meta.clear();
+    marks.length = 0;
+    settings = { ...settings, linkedSheets: [] };
+    const { link: made } = await linkSheet({ sheetId: link.sheetId, gid: '5' }, 'RTO', link.mapping, cells([['Task', 'Due'], ['A', '2026-10-05']]));
+    expect(marks).toEqual([`+${link.sheetId}#5`]);
+    await unlinkSheet(made.id);
+    expect(marks).toEqual([`+${link.sheetId}#5`, `-${link.sheetId}#5`]);
+    expect(settings.linkedSheets).toEqual([]);
   });
 });
 

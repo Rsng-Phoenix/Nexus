@@ -1,15 +1,19 @@
 import { PUSH_WORKER_URL } from '../config';
 import * as db from '../db/tasks';
-import { getSettings, subscribeSettings } from '../settings/store';
-import { activeTasks, onTasksWritten } from '../state/store';
+import { getSettings, refreshLabel, subscribeSettings } from '../settings/store';
+import { deskPost, inNexusDesk } from '../state/desk';
+import { activeTasks, allTasks, onTasksWritten, updateTask } from '../state/store';
+import { markCompleted } from '../task-utils';
 import type { Task } from '../types';
 import { upcomingDueFires } from '../calendar/deadline';
 import { calendarSourceLabel, linkedState, onLinkedUpdated } from '../calendar/linked';
 import { upcomingMeetings } from '../calendar/meetings';
 import { upcomingClashes } from '../calendar/clashes';
-import { deliverRing, pendingSnoozes, type MeetInfo, type NotifySettings } from './notify';
+import { addSnooze, deliverRing, pendingSnoozes, type MeetInfo, type NotifySettings } from './notify';
 import { upcomingFires } from './schedule';
 import { showSnack } from '../state/toasts';
+
+export { inNexusDesk };
 
 /**
  * Reminders on the web.
@@ -24,14 +28,14 @@ const HORIZON_MS = 7 * 24 * 60 * 60 * 1000;
 
 export const pushConfigured = () => !!PUSH_WORKER_URL;
 
-type DeskNote = { id: string; title: string; body: string; silent: boolean };
+/** What the Desk needs to show a notification and to act on its buttons (ref/kind/url → userInfo). */
+type DeskNote = { id: string; title: string; body: string; silent: boolean; ref?: string; kind?: string; url?: string };
 type DeskBridge = { postMessage(m: { show?: DeskNote; clear?: string[] }): void };
-/** Nexus Desk for Mac shows reminders as real macOS notifications (see nexus-desk-mac.jxa). */
+/** Nexus Desk for Mac shows reminders as real macOS notifications (see nexus-desk-mac.jxa); the widget view has this handler. */
 function deskNotify(): DeskBridge | null {
   const w = window as Window & { webkit?: { messageHandlers?: Record<string, DeskBridge> } };
   return w.webkit?.messageHandlers?.nexusNotify ?? null;
 }
-export const inNexusDesk = () => !!deskNotify();
 
 /**
  * Stands in for the service worker registration inside Nexus Desk (WebKit there has no web
@@ -43,10 +47,60 @@ function deskRegistration(bridge: DeskBridge): ServiceWorkerRegistration {
     showNotification: async (title: string, o: NotificationOptions = {}) => {
       const body = o.body ?? '';
       if (document.hasFocus() && document.visibilityState === 'visible') showSnack(body ? `${title} · ${body.split('\n')[0]}` : title);
-      bridge.postMessage({ show: { id: o.tag ?? `nexus:${Date.now()}`, title, body, silent: !!o.silent } });
+      const data = (o.data ?? {}) as { ref?: string; kind?: string; url?: string };
+      const note: DeskNote = { id: o.tag ?? `nexus:${Date.now()}`, title, body, silent: !!o.silent };
+      if (typeof data.ref === 'string') note.ref = data.ref;
+      if (typeof data.kind === 'string') note.kind = data.kind;
+      if (typeof data.url === 'string') note.url = data.url;
+      bridge.postMessage({ show: note });
     },
     getNotifications: async () => []
   } as unknown as ServiceWorkerRegistration;
+}
+
+type NoteAction = { action: string; ref?: string; kind?: string; url?: string };
+
+/**
+ * A button on a Desk notification (mirror of sw.ts `notificationclick`): Done completes the
+ * task, Snooze re-rings after the Snooze setting, Join opens the meeting link, Open/tap is
+ * handled by the Desk itself (it shows the full window on the task).
+ */
+async function noteAction(a: NoteAction): Promise<void> {
+  const ref = a.ref ?? '';
+  if (a.action === 'done' && ref) {
+    const t = allTasks.value.find((x) => x.taskUuid === ref && x.deletedAt === 0);
+    if (t && !t.isCompleted) await updateTask(markCompleted(t));
+    await cancelRemoteRings(ref);
+    return;
+  }
+  if (a.action === 'snooze' && ref) {
+    const s = getSettings();
+    const fireAt = Date.now() + s.snoozeMinutes * 60_000;
+    const kind = a.kind === 'due' ? 'due' : 'task';
+    // Kept on the device too, so the next schedule publish (and the local timers) include it.
+    await addSnooze({ ref, kind, fireAt });
+    const auth = await workerAuth();
+    if (auth) {
+      await fetch(`${PUSH_WORKER_URL}/snooze`, { method: 'POST', headers: auth, body: JSON.stringify({ ref, fireAt, kind: `${kind}-s` }) }).catch(() => undefined);
+    }
+    void scheduleAll(200);
+    return;
+  }
+  if (a.action === 'join' && a.url && /^https:\/\//.test(a.url)) {
+    if (!deskPost({ openUrl: a.url })) window.open(a.url, '_blank', 'noopener');
+  }
+}
+
+/** The relay must not ring a task that was just completed from a notification. */
+async function cancelRemoteRings(ref: string): Promise<void> {
+  const auth = await workerAuth();
+  if (!auth) return;
+  await fetch(`${PUSH_WORKER_URL}/cancel`, { method: 'POST', headers: auth, body: JSON.stringify({ ref }) }).catch(() => undefined);
+}
+
+/** The Desk's notification categories carry the Snooze button's label ("Snooze 10 min"). */
+function publishCategories(): void {
+  deskPost({ categories: { snooze: refreshLabel(getSettings().snoozeMinutes) } });
 }
 export const notificationsSupported = () => typeof Notification !== 'undefined' && 'serviceWorker' in navigator;
 
@@ -261,6 +315,17 @@ export function initReminders(): void {
   window.addEventListener('online', () => void scheduleAll(500));
   // Nexus Desk stays open for days: local timers only reach 24 hours ahead, so re-arm hourly.
   if (deskNotify()) window.setInterval(() => void scheduleAll(), 60 * 60_000);
+  if (inNexusDesk()) {
+    // Buttons on the Desk's notifications come back here (this window owns the reminders).
+    (window as Window & { __nexusNoteAction?: (a: NoteAction) => void }).__nexusNoteAction = (a) => void noteAction(a).catch(() => undefined);
+    publishCategories();
+    let snooze = getSettings().snoozeMinutes;
+    subscribeSettings(() => {
+      if (getSettings().snoozeMinutes === snooze) return;
+      snooze = getSettings().snoozeMinutes;
+      publishCategories();
+    });
+  }
   void scheduleAll(1200);
 }
 

@@ -18,6 +18,14 @@
   --ease-enter: cubic-bezier(0.2, 0, 0, 1);
   --ease-std: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-bouncy: cubic-bezier(0.34, 1.56, 0.64, 1);
+  /* Springs: view/motion.ts installMotionTokens() replaces these with sampled linear() easings at boot. */
+  --spring-enter: var(--ease-enter);
+  --spring-move: var(--ease-enter);
+  --spring-snappy: var(--ease-bouncy);
+  --dur-enter: 420ms;
+  --dur-move: 460ms;
+  --dur-snappy: 300ms;
+  --dur-exit: 160ms;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --shadow-sheet: 0 -12px 48px rgba(0, 0, 0, 0.45);
@@ -49,12 +57,32 @@ input, textarea { font: inherit; color: inherit; }
 :focus-visible { outline: 2px solid color-mix(in srgb, var(--nx-accent) 70%, transparent); outline-offset: 2px; }
 ::selection { background: color-mix(in srgb, var(--nx-accent) 35%, transparent); }
 
-/* Press feedback: spring(0.5, 1500) scale to 0.97 */
-.press { transition: transform 220ms var(--ease-bouncy), background-color 160ms, opacity 160ms; }
-.press:active:not(:disabled) { transform: scale(0.97); transition-duration: 90ms; }
+/* Press feedback: scale to 0.97, released on the snappy spring */
+.press { transition: transform var(--dur-snappy) var(--spring-snappy), background-color 160ms, opacity 160ms; }
+.press:active:not(:disabled) { transform: scale(0.97); transition-duration: 90ms; transition-timing-function: var(--ease-std); }
 @media (hover: hover) {
   .press.clickable:hover, .nx-icon-btn:hover { background-color: color-mix(in srgb, var(--nx-textPri) 5%, transparent); }
 }
+
+/* A row in flight between two lists (motion.ts flip(): cross-quadrant moves). */
+.nx-fly { position: fixed; z-index: 80; margin: 0; pointer-events: none; will-change: transform; box-shadow: var(--shadow-float); }
+
+/* Skeleton shimmer for rows that are still loading (instead of a spinner). */
+.nx-skel { position: relative; overflow: hidden; border-radius: 10px; background: color-mix(in srgb, var(--nx-textSec) 10%, transparent); color: transparent !important; pointer-events: none; }
+.nx-skel::after { content: ''; position: absolute; inset: 0; transform: translateX(-100%); background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--nx-textPri) 7%, transparent), transparent); animation: nx-skel-shimmer 1.4s var(--ease-std) infinite; }
+@keyframes nx-skel-shimmer { to { transform: translateX(100%); } }
+
+/* Reduced motion (OS preference or Settings → Appearance → Motion): springs become ≤ 80 ms fades,
+   transitions and decorative keyframes stop; progress rings keep turning so they still mean "busy". */
+@media (prefers-reduced-motion: reduce) {
+  /* html[data-motion] (always set at boot) outranks the :root tokens motion.ts publishes. */
+  :root, html[data-motion] { --dur-enter: 80ms; --dur-move: 80ms; --dur-snappy: 80ms; --dur-exit: 80ms; --spring-enter: linear; --spring-move: linear; --spring-snappy: linear; }
+  *:not(.nx-avatar .ring):not(.nx-pf-spinner):not(.nx-pair-spinner), *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
+  .nx-skel::after { animation: none; }
+}
+html[data-motion='reduced'] { --dur-enter: 80ms; --dur-move: 80ms; --dur-snappy: 80ms; --dur-exit: 80ms; --spring-enter: linear; --spring-move: linear; --spring-snappy: linear; }
+html[data-motion='reduced'] *:not(.nx-avatar .ring):not(.nx-pf-spinner):not(.nx-pair-spinner), html[data-motion='reduced'] *::before, html[data-motion='reduced'] *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
+html[data-motion='reduced'] .nx-skel::after { animation: none; }
 
 /* ─── App shell ─────────────────────────────────────────────────────────────── */
 .nx-app { position: absolute; inset: 0; display: flex; flex-direction: column; padding-top: var(--safe-top); }
@@ -76,7 +104,7 @@ input, textarea { font: inherit; color: inherit; }
 
 /* ─── Matrix ────────────────────────────────────────────────────────────────── */
 .nx-matrix { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 8px; padding: 4px 10px calc(10px + var(--safe-bottom)); }
-.nx-quad { --c: var(--nx-accent); position: relative; display: flex; flex-direction: column; min-height: 0; border-radius: 18px; background: var(--nx-surface); border: 0.5px solid var(--nx-stroke); overflow: hidden; transition: transform 260ms var(--ease-bouncy), border-color 150ms, box-shadow 200ms; contain: layout paint; }
+.nx-quad { --c: var(--nx-accent); position: relative; display: flex; flex-direction: column; min-height: 0; border-radius: 18px; background: var(--nx-surface); border: 0.5px solid var(--nx-stroke); overflow: hidden; transition: transform var(--dur-snappy) var(--spring-snappy), border-color 150ms, box-shadow 200ms; contain: layout paint; }
 .nx-quad.drop { transform: scale(1.015); border: 1.5px solid var(--c); box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 10%, transparent); }
 .nx-quad-head { display: flex; align-items: center; gap: 8px; padding: 7px 10px; background: color-mix(in srgb, var(--c) 8%, transparent); cursor: pointer; user-select: none; transition: background-color 150ms; flex: none; }
 .nx-quad.drop .nx-quad-head { background: color-mix(in srgb, var(--c) 14%, transparent); }
@@ -102,7 +130,7 @@ input, textarea { font: inherit; color: inherit; }
 .nx-quad-empty { flex: 1; display: grid; place-items: center; font-size: 11px; color: color-mix(in srgb, var(--nx-textSec) 50%, transparent); transition: color 150ms; pointer-events: none; }
 .nx-quad.drop .nx-quad-empty { color: var(--c); font-weight: 600; }
 
-.nx-task { position: relative; display: flex; align-items: center; gap: 6px; padding: 2px 8px 2px 0; min-height: 36px; border-radius: 10px; background: var(--nx-surfaceEl); cursor: pointer; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: pan-y; transition: opacity 220ms var(--ease-std), transform 200ms var(--ease-bouncy); }
+.nx-task { position: relative; display: flex; align-items: center; gap: 6px; padding: 2px 8px 2px 0; min-height: 36px; border-radius: 10px; background: var(--nx-surfaceEl); cursor: pointer; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: pan-y; transition: opacity 220ms var(--ease-std), transform var(--dur-snappy) var(--spring-snappy); }
 .nx-task .bar { width: 3px; height: 32px; margin: 0 2px 0 0; border-radius: 0 3px 3px 0; background: var(--bar); flex: none; }
 .nx-task .title { flex: 1; min-width: 0; font-size: calc(11px * var(--nx-font-scale)); line-height: 1.36; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
 .nx-task.done { opacity: 0.3; }
@@ -111,10 +139,13 @@ input, textarea { font: inherit; color: inherit; }
 .nx-task .pin { flex: none; color: var(--nx-accent); }
 
 .nx-check { flex: none; display: grid; place-items: center; border-radius: 50%; }
-.nx-check .box { width: 58%; height: 58%; border-radius: 5px; border: 2px solid color-mix(in srgb, var(--c) 40%, transparent); display: grid; place-items: center; transition: background-color 160ms, border-color 160ms, transform 240ms var(--ease-bouncy); }
-.nx-check .box svg { opacity: 0; transform: scale(0.4); transition: opacity 120ms, transform 240ms var(--ease-bouncy); }
+.nx-check .box { width: 58%; height: 58%; border-radius: 5px; border: 2px solid color-mix(in srgb, var(--c) 40%, transparent); display: grid; place-items: center; transition: background-color 160ms, border-color 160ms, transform var(--dur-snappy) var(--spring-snappy); }
+.nx-check .box svg { opacity: 0; transform: scale(0.4); transition: opacity 120ms, transform var(--dur-snappy) var(--spring-snappy); }
+/* The tick draws itself: pathLength="24" so the dash maths is the same at every size. */
+.nx-check .box svg path { stroke-dasharray: 24; stroke-dashoffset: 24; transition: stroke-dashoffset var(--dur-snappy) var(--spring-snappy) 40ms; }
 .nx-check.on .box { background: var(--c); border-color: var(--c); }
 .nx-check.on .box svg { opacity: 1; transform: scale(1); }
+.nx-check.on .box svg path { stroke-dashoffset: 0; }
 .nx-check:active .box { transform: scale(0.86); }
 
 .nx-ghost { position: fixed; z-index: 90; left: 0; top: 0; max-width: 180px; pointer-events: none; display: flex; align-items: center; gap: 8px; padding: 8px 12px 8px 0; border-radius: 10px; background: var(--nx-surfaceEl); border: 1px solid var(--c); box-shadow: var(--shadow-float); font-size: 11px; will-change: translate, scale; transform-origin: var(--gx, 50%) var(--gy, 50%); }
@@ -192,7 +223,7 @@ input, textarea { font: inherit; color: inherit; }
 .nx-switch.on .thumb { left: 24px; width: 22px; height: 22px; background: #fff; }
 
 .nx-segmented { --n: 3; --i: 0; position: relative; display: grid; grid-template-columns: repeat(var(--n), 1fr); height: 40px; padding: 3px; border-radius: 12px; background: var(--nx-bg); }
-.nx-segmented .pill { position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / var(--n)); transform: translateX(calc(var(--i) * 100%)); border-radius: 10px; background: var(--nx-surfaceEl); border: 0.5px solid var(--nx-stroke); transition: transform 300ms var(--ease-enter); }
+.nx-segmented .pill { position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / var(--n)); transform: translateX(calc(var(--i) * 100%)); border-radius: 10px; background: var(--nx-surfaceEl); border: 0.5px solid var(--nx-stroke); transition: transform var(--dur-snappy) var(--spring-snappy); }
 .nx-segmented button { position: relative; font-size: 13px; font-weight: 500; color: var(--nx-textSec); border-radius: 10px; }
 .nx-segmented button.sel { font-weight: 600; color: var(--nx-textPri); }
 

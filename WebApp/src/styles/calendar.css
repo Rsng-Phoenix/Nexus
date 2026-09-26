@@ -174,6 +174,7 @@
 @keyframes nx-radar-spin { to { transform: rotate(360deg); } }
 @keyframes nx-radar-blip { 0%, 100% { transform: scale(0.6); opacity: 0.35; } 12% { transform: scale(1.4); opacity: 1; } 40% { transform: scale(1); opacity: 0.85; } }
 @media (prefers-reduced-motion: reduce) { .nx-radar .sweep, .nx-radar i { animation: none; } }
+html[data-motion='reduced'] .nx-radar .sweep, html[data-motion='reduced'] .nx-radar i { animation: none; }
 
 .nx-radar-bar { flex: none; display: flex; align-items: center; gap: 12px; margin: 0 12px 10px; padding: 8px 10px 8px 8px; border-radius: 18px; text-align: left; border: 1px solid var(--nx-stroke); background: var(--nx-surface); color: var(--nx-textPri); transition: border-color 160ms, background-color 160ms; }
 .nx-radar-bar.hot { border-color: color-mix(in srgb, #ff4060 45%, var(--nx-stroke)); background: linear-gradient(100deg, color-mix(in srgb, #ff4060 14%, var(--nx-surface)), var(--nx-surface) 70%); animation: nx-radar-in 420ms var(--ease-bouncy) both; }
@@ -191,6 +192,7 @@
 .nx-cal-day .clash-mark::after { content: ''; position: absolute; inset: -3px; border-radius: 50%; border: 1.5px solid #ff4060; animation: nx-clash-ping 2s ease-out 3; }
 @keyframes nx-clash-ping { from { transform: scale(0.6); opacity: 0.9; } to { transform: scale(1.9); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .nx-cal-day .clash-mark::after { animation: none; } }
+html[data-motion='reduced'] .nx-cal-day .clash-mark::after, html[data-motion='reduced'] .nx-radar-bar.hot, html[data-motion='reduced'] .nx-clash-list li, html[data-motion='reduced'] .nx-clash-line .overlap { animation: none; }
 
 .nx-cal-row.clash { box-shadow: inset 0 0 0 1px color-mix(in srgb, #ff4060 45%, transparent); }
 .nx-cal-row.clash .ic { color: #ff4060; }

@@ -92,6 +92,72 @@ export function adjustScale(block: NoteBlock, sel: Sel | null, delta: number): N
   }));
 }
 
+/** Spans of text[start, end) re-based to 0 (splitting a block). */
+export function sliceSpans(spans: NoteSpan[], start: number, end: number): NoteSpan[] {
+  const out: NoteSpan[] = [];
+  for (const s of spans) {
+    const a = Math.max(s.start, start);
+    const b = Math.min(s.end, end);
+    if (a < b) out.push({ ...s, start: a - start, end: b - start });
+  }
+  return out;
+}
+
+export function shiftSpans(spans: NoteSpan[], delta: number): NoteSpan[] {
+  return spans.map((s) => ({ ...s, start: s.start + delta, end: s.end + delta }));
+}
+
+function clipSpan(span: NoteSpan, length: number): NoteSpan {
+  const start = Math.max(0, Math.min(span.start, length));
+  const end = Math.max(start, Math.min(span.end, length));
+  return { ...span, start, end };
+}
+
+function commonPrefixLength(a: string, b: string): number {
+  const n = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < n && a[i] === b[i]) i++;
+  return i;
+}
+
+function commonSuffixLength(a: string, b: string, prefix: number): number {
+  const max = Math.min(a.length, b.length) - prefix;
+  let i = 0;
+  while (i < max && a[a.length - 1 - i] === b[b.length - 1 - i]) i++;
+  return i;
+}
+
+/**
+ * Moves the spans of [oldText] to fit [newText] after a single edit (typing, delete, paste).
+ * Same algorithm as Android's NoteSpanUtils.adjustSpansForEdit so styles survive edits identically.
+ */
+export function adjustSpansForEdit(oldText: string, newText: string, spans: NoteSpan[]): NoteSpan[] {
+  if (oldText === newText || !spans.length) return spans;
+  const prefix = commonPrefixLength(oldText, newText);
+  const suffix = commonSuffixLength(oldText, newText, prefix);
+  const oldMidLen = oldText.length - prefix - suffix;
+  const newMidLen = newText.length - prefix - suffix;
+  const delta = newMidLen - oldMidLen;
+  if (delta === 0) return spans.map((s) => clipSpan(s, newText.length));
+  const out: NoteSpan[] = [];
+  for (const span of spans) {
+    const c = clipSpan(span, oldText.length);
+    if (c.end <= prefix) out.push(c);
+    else if (c.start >= oldText.length - suffix) out.push({ ...c, start: c.start + delta, end: c.end + delta });
+    else if (c.start >= prefix && c.end <= oldText.length - suffix) {
+      if (newMidLen > 0) out.push({ ...c, start: prefix, end: prefix + newMidLen });
+    } else if (c.start < prefix && c.end > oldText.length - suffix) {
+      // The edit happened inside this span: it grows/shrinks with the text.
+      out.push({ ...c, end: c.end + delta });
+    } else if (c.start < prefix) {
+      out.push({ ...c, end: Math.max(c.start, Math.min(c.end, prefix) + Math.max(0, delta)) });
+    } else {
+      out.push({ ...c, start: prefix + newMidLen, end: c.end + delta });
+    }
+  }
+  return out.map((s) => clipSpan(s, newText.length)).filter((s) => s.end > s.start);
+}
+
 export function getSelectionFromEl(el: HTMLElement): Sel | null {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0 || !el.contains(sel.anchorNode)) return null;

@@ -5,7 +5,22 @@ import { withTaskDefaults } from '../task-utils';
 const DB_NAME = 'nexus_web';
 const STORE = 'tasks';
 const META = 'meta';
-const DB_VERSION = 1;
+const IMAGES = 'images';
+/**
+ * v1: tasks + meta. v2 (4.0): images (note pictures, keyed by content hash). The upgrade only adds
+ * what is missing, so any older database keeps its rows.
+ */
+const DB_VERSION = 2;
+
+/** A note picture, cached locally; `uploaded` says whether Drive has it (see sync/images.ts). */
+export interface ImageRecord {
+  id: string;
+  blob: Blob;
+  w: number;
+  h: number;
+  addedAt: number;
+  uploaded: boolean;
+}
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -22,7 +37,74 @@ function openDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(META)) {
         db.createObjectStore(META);
       }
+      if (!db.objectStoreNames.contains(IMAGES)) {
+        db.createObjectStore(IMAGES, { keyPath: 'id' });
+      }
     };
+  });
+}
+
+export async function getImage(id: string): Promise<ImageRecord | undefined> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(IMAGES, 'readonly').objectStore(IMAGES).get(id);
+    req.onsuccess = () => resolve(req.result as ImageRecord | undefined);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function putImage(rec: ImageRecord): Promise<void> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(IMAGES, 'readwrite').objectStore(IMAGES).put(rec);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function deleteImage(id: string): Promise<void> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(IMAGES, 'readwrite').objectStore(IMAGES).delete(id);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+/** Every cached image (blobs are read lazily by the browser, so this stays cheap). */
+export async function getAllImages(): Promise<ImageRecord[]> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(IMAGES, 'readonly').objectStore(IMAGES).getAll();
+    req.onsuccess = () => resolve(req.result as ImageRecord[]);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function markImageUploaded(id: string, uploaded = true): Promise<void> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const store = db.transaction(IMAGES, 'readwrite').objectStore(IMAGES);
+    const get = store.get(id);
+    get.onsuccess = () => {
+      const rec = get.result as ImageRecord | undefined;
+      if (!rec) return resolve();
+      const put = store.put({ ...rec, uploaded });
+      put.onsuccess = () => resolve();
+      put.onerror = () => reject(put.error);
+    };
+    get.onerror = () => reject(get.error);
+  });
+}
+
+/** Account switch: cached pictures belong to the old account's Drive too. */
+export async function wipeAllImages(): Promise<void> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const t = db.transaction(IMAGES, 'readwrite');
+    t.objectStore(IMAGES).clear();
+    t.oncomplete = () => resolve();
+    t.onerror = () => reject(t.error);
   });
 }
 

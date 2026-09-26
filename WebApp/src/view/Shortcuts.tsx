@@ -1,4 +1,6 @@
 import { signal } from '@preact/signals';
+import { deskInfo, inNexusDesk } from '../state/desk';
+import { isPc } from '../state/viewport';
 import { Dialog, TextButton } from './kit';
 
 /** Mac keyboards say ⌘ and ⌥; everyone else Ctrl and Alt. */
@@ -63,6 +65,30 @@ export const SHORTCUT_GROUPS: Array<{ title: string; keys: [string, string][] }>
       [`${MOD} ⏎`, 'Mark the task done'],
       ['esc', 'Close']
     ]
+  },
+  {
+    // Nexus Desk Quick Add panel (§4.2) — the global shortcut opens it from any app.
+    title: 'Quick Add (Nexus Desk)',
+    keys: [
+      ['⏎', 'Add and close'],
+      ['⇧ ⏎', 'Add and keep the panel open for the next one'],
+      [`${MOD} 1–4`, `Priority High / Medium / Low / None (also ${ALT} 1–4)`],
+      [`${MOD} ⏎`, 'Save'],
+      ['esc', 'Clear what you typed · again closes'],
+      [`${MOD} ⇧ V`, 'Paste as plain text'],
+      ['tomorrow 5pm !1', 'Dates, reminders and priority as you type']
+    ]
+  },
+  {
+    // Widget composer (§4.3): idle pill → pick a priority → type.
+    title: 'Widget',
+    keys: [
+      ['N ⏎', 'New task: pick a priority, then type'],
+      ['1 2 3 4', 'Pick High / Medium / Low / None (or arrows, Tab)'],
+      ['⏎', 'Confirm the priority · add the task'],
+      ['esc', 'Back a step · close'],
+      [`${MOD} ⇧ ⏎`, 'Add, then bring the widget forward to review']
+    ]
   }
 ];
 
@@ -71,12 +97,22 @@ export const SHORTCUTS_SUMMARY = `${MOD}K palette · ⏎ new task · 1–4 quadr
 
 export const DESK_SHORTCUT_NOTE = 'Nexus Desk: ⌃⌥N (Mac) / Ctrl+Alt+N (Windows) opens a new task from any app';
 
+/** The note with the shortcut the Desk actually has (it can be changed in Settings → Nexus Desk). */
+export function deskShortcutNote(): string {
+  const d = deskInfo.value;
+  if (!inNexusDesk() || !d?.hotkey) return DESK_SHORTCUT_NOTE;
+  return `Nexus Desk: ${d.hotkey} opens ${d.quickAddStyle === 'widget' ? 'the widget' : 'Quick Add'} from any app${d.hotkeyOn === false ? ' (off right now)' : ''} · change it in Settings → Nexus Desk`;
+}
+
 export function ShortcutsDialog() {
   const close = () => (shortcutsOpen.value = false);
+  // Quick Add and widget keys only matter where the Desk exists; on a Mac/Windows browser they still say what the Desk offers.
+  const showDesk = inNexusDesk() || isPc.value;
+  const groups = SHORTCUT_GROUPS.filter((g) => showDesk || !/Quick Add|Widget/.test(g.title));
   return (
     <Dialog open={shortcutsOpen.value} onClose={close} title="Keyboard shortcuts" actions={<TextButton onClick={close}>Done</TextButton>} wide>
       <div class="nx-keys-groups">
-        {SHORTCUT_GROUPS.map((g) => (
+        {groups.map((g) => (
           <section key={g.title}>
             <h4>{g.title}</h4>
             <dl class="nx-keys">
@@ -89,7 +125,7 @@ export function ShortcutsDialog() {
             </dl>
           </section>
         ))}
-        <p class="nx-keys-note">{DESK_SHORTCUT_NOTE}</p>
+        <p class="nx-keys-note">{deskShortcutNote()}</p>
       </div>
     </Dialog>
   );

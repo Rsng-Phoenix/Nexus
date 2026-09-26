@@ -5,15 +5,15 @@ import { haptic } from '../lib/haptics';
 import { formatReminderLabel } from '../reminder-label';
 import { patchSettings, settingsSig } from '../settings/store';
 import * as nav from '../state/nav';
-import { applyOrder, archiveTasks, byPriority, deleteTasks, importedByPriority, purgeExpired, restoreTasks, setChecked, today, tomorrow, unarchiveTasks } from '../state/store';
+import { allTasks, applyOrder, archiveTasks, byPriority, deleteTasks, importedByPriority, moveToPriority, purgeExpired, restoreTasks, setChecked, today, tomorrow, unarchiveTasks } from '../state/store';
 import { folderGroups } from '../import/folder';
 import { FolderRow } from './Matrix';
-import { offerUndo } from '../state/toasts';
+import { offerUndo, showSnack } from '../state/toasts';
 import type { Priority, Task } from '../types';
 import { PRIORITY_META } from '../types';
 import { Icon } from './icons';
 import { Checkbox, CountBadge, Dialog, IconButton, Menu, Slider, TextButton } from './kit';
-import { animate, BOUNCY, ENTER, flip, measure, STANDARD, useEnterExit } from './motion';
+import { EXIT, flip, measure, play, SPRING_ENTER, SPRING_MOVE, STANDARD, useEnterExit } from './motion';
 import { tour } from './tour-state';
 import { listShareDoc } from '../share/doc';
 import { sharePayloadFromDoc } from '../share/export';
@@ -36,6 +36,9 @@ export function FullScreenQuadrant({ priority, folder, leaving, onExited }: {
   const before = useRef(new Map<string, DOMRect>());
   const [confirm, setConfirm] = useState<{ label: string; tasks: Task[] } | null>(null);
   const [retentionOpen, setRetentionOpen] = useState(false);
+  // Bumped when a section opens or closes so the rows below glide instead of jumping.
+  const [layoutTick, setLayoutTick] = useState(0);
+  const relayout = () => setLayoutTick((t) => t + 1);
 
   useEnterExit(
     root,
@@ -43,7 +46,7 @@ export function FullScreenQuadrant({ priority, folder, leaving, onExited }: {
     onExited,
     [{ transform: 'translateY(100%)', opacity: 0.6 }, { transform: 'none', opacity: 1 }],
     [{ transform: 'none', opacity: 1 }, { transform: 'translateY(100%)', opacity: 0 }],
-    ENTER,
+    SPRING_ENTER,
     { duration: 260, easing: STANDARD }
   );
 
@@ -51,6 +54,23 @@ export function FullScreenQuadrant({ priority, folder, leaving, onExited }: {
   useLayoutEffect(() => {
     flip(listEl.current, before.current);
     before.current = measure(listEl.current);
+  }, [key, layoutTick]);
+
+  // A task moved to another priority from inside this page (detail sheet, Alt+1–4) leaves the
+  // list: say where it went and offer the way back, so the page never silently loses a row.
+  const seen = useRef<Map<number, Task>>(new Map());
+  useLayoutEffect(() => {
+    const now = new Map(all.map((t) => [t.id, t] as const));
+    if (!folder && !leaving) {
+      for (const [id, was] of seen.current) {
+        if (now.has(id)) continue;
+        const t = allTasks.value.find((x) => x.id === id);
+        if (!t || t.deletedAt !== 0 || t.archivedAt !== 0 || t.priority === priority) continue;
+        const dest = PRIORITY_META[t.priority].label;
+        showSnack(`Moved to ${dest}`, { label: 'Undo', run: () => void moveToPriority(t, was.priority) }, 5000);
+      }
+    }
+    seen.current = now;
   }, [key]);
 
   const deleteMany = (tasks: Task[], label: string) => {
@@ -91,11 +111,11 @@ export function FullScreenQuadrant({ priority, folder, leaving, onExited }: {
           </div>
         )}
         {folder ? (
-          <FolderList tasks={all} />
+          <FolderList tasks={all} onToggled={relayout} />
         ) : (
           <>
             <ReorderList tasks={open} scroller={listEl} />
-            {imported.length > 0 && <div class="nx-fs-folder"><FolderRow priority={priority} tasks={imported} /></div>}
+            {imported.length > 0 && <div class="nx-fs-folder" data-flip="folder"><FolderRow priority={priority} tasks={imported} /></div>}
           </>
         )}
         {!folder && wontDo.length > 0 && (
@@ -106,6 +126,7 @@ export function FullScreenQuadrant({ priority, folder, leaving, onExited }: {
             onArchiveAll={() => archiveMany(wontDo, "won't-do tasks")}
             onDeleteAll={() => setConfirm({ label: "won't-do tasks", tasks: wontDo })}
             onRetention={() => setRetentionOpen(true)}
+            onToggled={relayout}
           />
         )}
         {!folder && completed.length > 0 && (
@@ -117,6 +138,7 @@ export function FullScreenQuadrant({ priority, folder, leaving, onExited }: {
             onArchiveAll={() => archiveMany(completed, 'completed tasks')}
             onDeleteAll={() => setConfirm({ label: 'completed tasks', tasks: completed })}
             onRetention={() => setRetentionOpen(true)}
+            onToggled={relayout}
           />
         )}
         <div style={{ height: 96 }} />
@@ -161,33 +183,80 @@ export function FullScreenQuadrant({ priority, folder, leaving, onExited }: {
   );
 }
 
+/**
+ * Group collapse: rows fade up and out (staggered) before they unmount, then the parent's FLIP
+ * glides everything below into place; expanding lets the FLIP pop the rows back in.
+ */
+function useCollapse(closed: boolean, setClosed: (v: boolean) => void, onToggled: () => void) {
+  const rows = useRef<HTMLDivElement>(null);
+  const busy = useRef(false);
+  return {
+    rows,
+    toggle: () => {
+      if (busy.current) return;
+      if (closed) {
+        setClosed(false);
+        onToggled();
+        return;
+      }
+      const els = Array.from(rows.current?.querySelectorAll<HTMLElement>('[data-flip]') ?? []);
+      let pending = 0;
+      const done = () => {
+        if (--pending > 0) return;
+        busy.current = false;
+        setClosed(true);
+        onToggled();
+      };
+      els.forEach((el, i) => {
+        const a = play(el, [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translateY(-8px)' }], { ...EXIT, delay: Math.min(i, 6) * 14 }, 'collapse');
+        if (!a) return;
+        pending++;
+        a.onfinish = done;
+      });
+      if (!pending) {
+        setClosed(true);
+        onToggled();
+      } else busy.current = true;
+    }
+  };
+}
+
 /** The Imported folder: grouped by day (Missed, Tomorrow, then each date), no reordering. */
-function FolderList({ tasks }: { tasks: Task[] }) {
+function FolderList({ tasks, onToggled }: { tasks: Task[]; onToggled: () => void }) {
   const groups = folderGroups(tasks, today.value, tomorrow.value);
   const [shut, setShut] = useState<Record<string, boolean>>({ missed: true, done: true });
   if (!groups.length) return null;
   return (
     <>
       <p class="nx-folder-note">Imported tasks wait here and move onto the matrix on their day. Their reminders ring either way. Pin one to keep it on the matrix.</p>
-      {groups.map((g) => {
-        const closed = shut[g.key] ?? false;
-        const color = g.tone === 'late' ? '#FF4060' : g.tone === 'next' ? 'var(--c)' : 'var(--nx-textSec)';
-        return (
-          <div key={g.key} class="nx-folder-group">
-            <button class="nx-section nx-folder-head" aria-expanded={!closed} onClick={() => setShut({ ...shut, [g.key]: !closed })}>
-              <span class="chev"><Icon name="expandMore" size={18} color={color} style={{ transform: closed ? 'rotate(-90deg)' : 'none', transition: 'transform 220ms' }} /></span>
-              <span class="lbl" style={{ color }}>{g.label.toUpperCase()}</span>
-              <CountBadge count={g.tasks.length} color={color} />
-            </button>
-            {!closed && g.tasks.map((t) => <SwipeRow key={t.id} task={t} />)}
-          </div>
-        );
-      })}
+      {groups.map((g) => (
+        <FolderGroup key={g.key} group={g} closed={shut[g.key] ?? false} setClosed={(v) => setShut((s) => ({ ...s, [g.key]: v }))} onToggled={onToggled} />
+      ))}
     </>
   );
 }
 
-function Section({ label, color, tasks, onArchiveAll, onDeleteAll, onRetention, tourAnchor }: {
+function FolderGroup({ group: g, closed, setClosed, onToggled }: {
+  group: ReturnType<typeof folderGroups>[number];
+  closed: boolean;
+  setClosed: (v: boolean) => void;
+  onToggled: () => void;
+}) {
+  const color = g.tone === 'late' ? '#FF4060' : g.tone === 'next' ? 'var(--c)' : 'var(--nx-textSec)';
+  const { rows, toggle } = useCollapse(closed, setClosed, onToggled);
+  return (
+    <div class="nx-folder-group">
+      <button class="nx-section nx-folder-head" aria-expanded={!closed} onClick={toggle}>
+        <span class="chev"><Icon name="expandMore" size={18} color={color} style={{ transform: closed ? 'rotate(-90deg)' : 'none', transition: 'transform var(--dur-snappy) var(--spring-snappy)' }} /></span>
+        <span class="lbl" style={{ color }}>{g.label.toUpperCase()}</span>
+        <CountBadge count={g.tasks.length} color={color} />
+      </button>
+      {!closed && <div ref={rows} class="nx-section-rows">{g.tasks.map((t) => <SwipeRow key={t.id} task={t} />)}</div>}
+    </div>
+  );
+}
+
+function Section({ label, color, tasks, onArchiveAll, onDeleteAll, onRetention, tourAnchor, onToggled }: {
   label: string;
   color: string;
   tasks: Task[];
@@ -195,14 +264,16 @@ function Section({ label, color, tasks, onArchiveAll, onDeleteAll, onRetention, 
   onDeleteAll: () => void;
   onRetention: () => void;
   tourAnchor?: boolean;
+  onToggled: () => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
+  const { rows, toggle } = useCollapse(collapsed, setCollapsed, onToggled);
   const days = settingsSig.value.retentionDays;
   return (
     <>
       <div class="nx-section" data-tour={tourAnchor ? 'retention' : undefined}>
-        <button class="chev" aria-label={collapsed ? 'Expand' : 'Collapse'} onClick={() => setCollapsed(!collapsed)}>
-          <Icon name="expandMore" size={18} color={color} style={{ transform: collapsed ? 'rotate(-90deg)' : 'none', transition: 'transform 220ms' }} />
+        <button class="chev" aria-label={collapsed ? 'Expand' : 'Collapse'} onClick={toggle}>
+          <Icon name="expandMore" size={18} color={color} style={{ transform: collapsed ? 'rotate(-90deg)' : 'none', transition: 'transform var(--dur-snappy) var(--spring-snappy)' }} />
         </button>
         <span class="lbl" style={{ color }}>{label}</span>
         <CountBadge count={tasks.length} color={color} />
@@ -216,7 +287,7 @@ function Section({ label, color, tasks, onArchiveAll, onDeleteAll, onRetention, 
           ]}
         />
       </div>
-      {!collapsed && tasks.map((t) => <SwipeRow key={t.id} task={t} />)}
+      {!collapsed && <div ref={rows} class="nx-section-rows">{tasks.map((t) => <SwipeRow key={t.id} task={t} />)}</div>}
     </>
   );
 }
@@ -387,11 +458,8 @@ function SwipeRow({ task, reorder }: { task: Task; reorder?: ReorderHooks }) {
     const el = card.current!;
     const from = el.style.transform || 'translateX(0)';
     el.style.transform = to ? `translateX(${to}px)` : '';
-    const a = animate(el, [{ transform: from }, { transform: `translateX(${to}px)` }], {
-      duration: to ? 200 : 320,
-      easing: to ? STANDARD : BOUNCY,
-      fill: 'none'
-    });
+    // Off-screen (delete) is a quick ease-out; back to rest springs.
+    const a = play(el, [{ transform: from }, { transform: `translateX(${to}px)` }], to ? { duration: 200, easing: STANDARD, fill: 'none' } : { ...SPRING_MOVE, fill: 'none' }, 'settle');
     if (a && after) a.onfinish = after;
     else after?.();
     if (!to && bg.current) bg.current.style.opacity = '0';

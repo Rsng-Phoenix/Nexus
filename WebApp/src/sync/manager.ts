@@ -23,6 +23,8 @@ import { showDriveScopePrompt } from '../ui/drive-scope-prompt';
 import { deleteFile, DriveError, findBackup, uploadBackup } from './drive';
 import { syncFeedCreds } from '../calendar/feed';
 import { syncLinkedCalendars } from '../calendar/linkedSync';
+import { syncLinkedSheets } from '../import/linkedSheetsSync';
+import { syncImages } from './images';
 import { countActiveRemovals, mergeTasks } from './merge';
 import { ensureDriveToken, signInWithDriveScope } from './sign-in-drive';
 
@@ -129,6 +131,7 @@ async function settleLocalData(email: string): Promise<boolean> {
   const local = await localUserTasks();
   if (local.length === 0) {
     await db.wipeAllTasks(); // only tombstones/demos from before: start clean
+    await db.wipeAllImages();
     await reload();
     return true;
   }
@@ -170,6 +173,7 @@ async function settleLocalData(email: string): Promise<boolean> {
       if (sure === 'merge') return true;
     }
     await db.wipeAllTasks();
+    await db.wipeAllImages();
     await reload();
   }
   return true;
@@ -301,6 +305,7 @@ async function signOutFinish(choice: 'remove' | 'keep'): Promise<string> {
   });
   if (choice === 'remove') {
     await db.wipeAllTasks();
+    await db.wipeAllImages();
     await reload(); // reminders re-publish from the (now empty) task list
     return 'Signed out · tasks removed from this device';
   }
@@ -416,6 +421,10 @@ async function syncOnce(background: boolean): Promise<SyncResult> {
   await syncFeedCreds(token).catch(() => {});
   // Linked calendars: the same links on every device.
   await syncLinkedCalendars(token).catch(() => {});
+  // Linked Google Sheets: the same links on every device (their tasks came with the backup above).
+  await syncLinkedSheets(token).catch(() => {});
+  // Images in notes (sync/images.ts).
+  await syncImages(token).catch(() => {});
   const pulled = merge.downloaded > 0 ? ` · ${merge.downloaded} from Drive` : '';
   return { ok: true, message: `Synced${pulled}` };
 }

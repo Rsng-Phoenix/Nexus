@@ -19,8 +19,10 @@ import {
   settingsSig,
   SNOOZE_CHOICES,
   TRASH_DAYS_RANGE,
+  type MotionMode,
   type StartView
 } from '../settings/store';
+import { deskInfo, deskPost, inNexusDesk } from '../state/desk';
 import * as nav from '../state/nav';
 import { activeTasks, archivedTasks, isDemo, purgeExpired, recentlyDeleted, reload } from '../state/store';
 import { showSnack } from '../state/toasts';
@@ -38,6 +40,7 @@ import { FeedSettings } from './FeedSettings';
 import { LinkedSheets } from './LinkedSheets';
 import { Icon, type IconName } from './icons';
 import { miniSupported, openMiniWindow } from './MiniWindow';
+import { play, SPRING_ENTER } from './motion';
 import { Avatar } from './Shell';
 import type { Task, ThemeMode } from '../types';
 import type { LayerProps } from './App';
@@ -71,27 +74,32 @@ const Accent = 'var(--nx-accent)';
  * own page (so the back gesture returns to the list). Desktop: categories on the left, the chosen
  * one on the right.
  */
-type CatId = 'account' | 'general' | 'notifications' | 'reminders' | 'calendar' | 'tasks' | 'appearance' | 'desktop' | 'backup' | 'about';
+type CatId = 'account' | 'devices' | 'desk' | 'notifications' | 'calendar' | 'tasks' | 'import' | 'backup' | 'appearance' | 'help';
 type Cat = { id: CatId; label: string; icon: IconName; tint: string };
 const CATS: Cat[] = [
   { id: 'account', label: 'Account & sync', icon: 'cloud', tint: Blue },
-  { id: 'general', label: 'General', icon: 'tune', tint: Accent },
+  { id: 'devices', label: 'Devices', icon: 'widgets', tint: Blue },
+  { id: 'desk', label: 'Nexus Desk', icon: 'desktop', tint: Accent },
   { id: 'notifications', label: 'Notifications', icon: 'bell', tint: Red },
-  { id: 'reminders', label: 'Reminders & deadlines', icon: 'schedule', tint: Amber },
   { id: 'calendar', label: 'Calendar', icon: 'calendar', tint: Blue },
-  { id: 'tasks', label: 'Tasks & trash', icon: 'checklist', tint: Green },
-  { id: 'appearance', label: 'Appearance & feel', icon: 'palette', tint: Accent },
-  { id: 'desktop', label: 'Desktop & widgets', icon: 'widgets', tint: Blue },
+  { id: 'tasks', label: 'Tasks & notes', icon: 'checklist', tint: Green },
+  { id: 'import', label: 'Import & linked sheets', icon: 'table', tint: Green },
   { id: 'backup', label: 'Backup & restore', icon: 'storage', tint: Green },
-  { id: 'about', label: 'Help & about', icon: 'info', tint: Accent }
+  { id: 'appearance', label: 'Appearance', icon: 'palette', tint: Accent },
+  { id: 'help', label: 'Help', icon: 'info', tint: Accent }
 ];
+// §4.6: You / Every day / Data / Look & feel / Help. "Nexus Desk" only shows inside the Desk.
 const GROUPS: [string, CatId[]][] = [
-  ['Everyday', ['general', 'notifications', 'reminders', 'calendar']],
-  ['Your tasks', ['tasks', 'backup']],
-  ['Look & devices', ['appearance', 'desktop']],
-  ['Help', ['about']]
+  ['You', ['account', 'devices', 'desk']],
+  ['Every day', ['notifications', 'calendar', 'tasks']],
+  ['Data', ['import', 'backup']],
+  ['Look & feel', ['appearance']],
+  ['Help', ['help']]
 ];
-const catOf = (id: string | undefined) => CATS.find((c) => c.id === id);
+// Old deep links (nav.open({kind:'settings', cat})) keep landing somewhere sensible.
+const CAT_ALIASES: Record<string, CatId> = { general: 'tasks', reminders: 'notifications', desktop: 'devices', about: 'help' };
+const catOf = (id: string | undefined) => CATS.find((c) => c.id === (id && CAT_ALIASES[id]) || c.id === id);
+const visibleCats = (ids: CatId[]) => ids.filter((id) => id !== 'desk' || inNexusDesk());
 
 function pauseLabel(until: number): string {
   if (until >= Number.MAX_SAFE_INTEGER) return 'Until you turn them back on';
@@ -214,6 +222,98 @@ function CommandBox({ label, cmd, hint }: { label: string; cmd: string; hint: st
   );
 }
 
+/** Window modes and hot corners the Desk understands ({set:{key:'mode'|'corner'}}, §2.5). */
+const DESK_MODES: [string, string][] = [
+  ['float', 'Floats over apps'],
+  ['desktop', 'On the desktop'],
+  ['normal', 'Normal window']
+];
+const DESK_CORNERS: [string, string][] = [
+  ['off', 'Off'],
+  ['tl', 'Top left'],
+  ['tr', 'Top right'],
+  ['bl', 'Bottom left'],
+  ['br', 'Bottom right']
+];
+
+/** Change a Desk preference: tell the Desk, and show the new value at once (it re-injects the info later). */
+function setDesk(key: 'quickAddStyle' | 'notify' | 'login' | 'mode' | 'corner', value: string | boolean) {
+  deskPost({ set: { key, value } });
+  deskInfo.value = { ...(deskInfo.value ?? {}), [key]: value };
+}
+
+/** Settings → Nexus Desk (only inside the Desk). Everything writes through the bridge. */
+function DeskSettings() {
+  const info = deskInfo.value ?? {};
+  const mac = info.platform !== 'windows';
+  const hotkey = info.hotkey || (mac ? '⌃⌥N' : 'Ctrl+Alt+N');
+  return (
+    <>
+      <SettingsGroup>
+        <SettingsRow
+          icon="keyboard"
+          title="Shortcut"
+          subtitle={info.hotkeyOn === false ? `${hotkey} · off in the Desk menu` : `${hotkey} from any app`}
+          tint={Amber}
+          trailing={<TextButton onClick={() => deskPost({ hotkey: 'change' })}>Change…</TextButton>}
+        />
+        <GroupDivider />
+        <SettingsRow icon="add" title="Shortcut opens" subtitle="The Quick Add panel adds one task and hides; the widget stays" tint={Accent} />
+        <div class="nx-settings-seg">
+          <Segmented<'panel' | 'widget'>
+            options={[
+              ['panel', 'Quick Add panel'],
+              ['widget', 'The widget']
+            ]}
+            value={info.quickAddStyle === 'widget' ? 'widget' : 'panel'}
+            onChange={(v) => setDesk('quickAddStyle', v)}
+          />
+        </div>
+      </SettingsGroup>
+      <SectionHeader>{mac ? 'Mac' : 'Windows'}</SectionHeader>
+      <SettingsGroup>
+        <SettingsRow
+          icon="bellRing"
+          title={`Reminders as ${mac ? 'Mac' : 'Windows'} notifications`}
+          subtitle="Snooze and Done right on the notification"
+          tint={Blue}
+          trailing={<Switch label="Reminders as notifications" checked={info.notify !== false} onChange={(v) => setDesk('notify', v)} />}
+        />
+        <GroupDivider />
+        <SettingsRow
+          icon="restart"
+          title="Start at login"
+          subtitle="Nexus Desk opens when you sign in"
+          tint={Green}
+          trailing={<Switch label="Start at login" checked={info.login === true} onChange={(v) => setDesk('login', v)} />}
+        />
+      </SettingsGroup>
+      <SectionHeader>Widget window</SectionHeader>
+      <SettingsGroup>
+        <SettingsRow icon="pip" title="Window mode" subtitle="Where the small Nexus window sits" tint={Accent} />
+        <div class="nx-settings-seg">
+          <Segmented<string> options={DESK_MODES} value={DESK_MODES.some(([v]) => v === info.mode) ? info.mode! : 'float'} onChange={(v) => setDesk('mode', v)} />
+        </div>
+        <GroupDivider />
+        <SettingsRow icon="tune" title="Hot corner" subtitle="Push the pointer into this corner to show or hide it" tint={Accent} />
+        <div class="nx-settings-seg">
+          <Segmented<string> options={DESK_CORNERS} value={DESK_CORNERS.some(([v]) => v === info.corner) ? info.corner! : 'off'} onChange={(v) => setDesk('corner', v)} />
+        </div>
+      </SettingsGroup>
+      <SectionHeader>From other apps</SectionHeader>
+      <SettingsGroup>
+        <SettingsRow
+          icon="share"
+          title={mac ? '“Add to Nexus” is in every app’s Services menu' : '“Add to Nexus” from the tray menu'}
+          subtitle="Select text anywhere and send it here · nexus://add?text=… opens Quick Add"
+          tint={Blue}
+        />
+      </SettingsGroup>
+      <p class="nx-set-note">Nexus Desk {info.version ?? ''} · these settings live in the Desk app on this computer, not in your account.</p>
+    </>
+  );
+}
+
 function DeskCard({ os }: { os: 'mac' | 'windows' }) {
   const c = deskCommands();
   const mac = os === 'mac';
@@ -298,6 +398,16 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
       scroller.current?.scrollTo({ top: 0 });
     } else nav.open({ kind: 'settings', cat: id });
   };
+  // Split mode: the body crossfades and slides in on every category switch (interruptible).
+  const firstBody = useRef(true);
+  useLayoutEffect(() => {
+    if (mode !== 'split') return;
+    if (firstBody.current) {
+      firstBody.current = false;
+      return;
+    }
+    play(scroller.current, [{ opacity: 0, transform: 'translateX(14px)' }, { opacity: 1, transform: 'none' }], { ...SPRING_ENTER, fill: 'none' }, 'cat');
+  }, [current, mode]);
 
   useEffect(() => {
     const refresh = () => void readPerm().then(setPerm);
@@ -393,35 +503,39 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
     switch (id) {
       case 'account':
         return s.googleEmail ? `${profileLastSyncedLabel()}${longSession ? ' · stays signed in' : ''}` : 'Not signed in · back up with Google Drive';
-      case 'general':
-        return `Opens on ${s.startView === 'calendar' ? 'Calendar' : 'Matrix'}`;
-      case 'notifications':
+      case 'devices':
+        return platform() === 'other' ? 'Set up another device · widgets · home screen' : inNexusDesk() ? 'Set up another device · mini window · widgets' : 'Set up another device · Nexus Desk · widgets';
+      case 'desk': {
+        const d = deskInfo.value;
+        return `${d?.hotkey || (d?.platform === 'windows' ? 'Ctrl+Alt+N' : '⌃⌥N')} opens ${d?.quickAddStyle === 'widget' ? 'the widget' : 'Quick Add'} · notifications ${d?.notify === false ? 'off' : 'on'}`;
+      }
+      case 'notifications': {
+        const snooze = `snooze ${snoozeLabel(s.snoozeMinutes)}`;
         if (paused) return `Paused · ${pauseLabel(s.pauseNotificationsUntil).toLowerCase()}`;
         return perm === 'on'
-          ? `On · at most ${s.maxNotificationsPerHour} an hour`
+          ? `On · at most ${s.maxNotificationsPerHour} an hour · ${snooze}`
           : perm === 'local'
-            ? 'Only while Nexus is open'
+            ? `Only while Nexus is open · ${snooze}`
             : perm === 'blocked'
               ? 'Blocked in browser settings'
               : perm === 'install'
                 ? 'Add to Home Screen first'
                 : perm === 'unsupported'
                   ? 'Not supported here'
-                  : 'Off';
-      case 'reminders':
-        return `Snooze ${snoozeLabel(s.snoozeMinutes)} · ${dueDefaults.length ? `${dueDefaults.length} deadline alert${dueDefaults.length === 1 ? '' : 's'} at ${formatAlertTime(s.defaultDueAlertTime)}` : 'no deadline alerts'}`;
+                  : `Off · ${snooze}`;
+      }
       case 'calendar':
         return `${s.linkedCalendars.length ? `${s.linkedCalendars.length} linked · checked every ${refreshLabel(s.calendarRefreshMinutes)}` : 'No linked calendars'} · clash radar ${s.clashRadar ? 'on' : 'off'}${s.calendarFeed ? ' · shown in your calendar apps' : ''}`;
       case 'tasks':
-        return `${archivedCount} archived · ${deletedCount} recently deleted`;
+        return `Opens on ${s.startView === 'calendar' ? 'Calendar' : 'Matrix'} · ${archivedCount} archived · ${deletedCount} recently deleted`;
+      case 'import':
+        return s.linkedSheets.length ? `${s.linkedSheets.length} linked sheet${s.linkedSheets.length === 1 ? '' : 's'} · Excel, CSV, calendar files` : 'Excel, CSV, calendar files, Google Sheets';
       case 'appearance':
-        return `${s.themeMode === 'SYSTEM' ? 'System' : s.themeMode === 'DARK' ? 'Dark' : 'Light'} theme · text ${Math.round(s.fontScale * 100)}%`;
-      case 'desktop':
-        return platform() === 'other' ? 'Widgets and home screen' : 'Nexus Desk, mini window, widgets';
+        return `${s.themeMode === 'SYSTEM' ? 'System' : s.themeMode === 'DARK' ? 'Dark' : 'Light'} theme · text ${Math.round(s.fontScale * 100)}%${s.motion === 'reduced' ? ' · reduced motion' : ''}`;
       case 'backup':
         return 'Save or restore a backup file';
-      case 'about':
-        return `Nexus ${APP_VERSION} · what's new, tour, shortcuts`;
+      case 'help':
+        return `Nexus ${APP_VERSION} · shortcuts, tour, what's new, reset`;
     }
   };
 
@@ -496,62 +610,14 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
                 />
               )}
             </SettingsGroup>
-            <SettingsGroup>
-              <SettingsRow
-                icon="qrScan"
-                title="Set up another device"
-                subtitle="Scan a code to copy your linked calendars and settings to a phone, tablet or computer"
-                tint={Accent}
-                onClick={() => nav.open({ kind: 'pair' })}
-                trailing={<Chevron />}
-              />
-            </SettingsGroup>
             <p class="nx-set-note">
               Nexus stores your tasks in a private Nexus-only folder of your own Google Drive. It can't see any of your other files.
             </p>
           </>
         );
 
-      case 'general':
-        return (
-          <>
-            <SettingsGroup>
-              <SettingsRow icon="today" title="Open Nexus on" subtitle="The first screen you see. The other one is one tap away." tint={Accent} />
-              <div class="nx-settings-seg">
-                <Segmented<StartView>
-                  options={[
-                    ['matrix', 'Matrix'],
-                    ['calendar', 'Calendar']
-                  ]}
-                  value={s.startView}
-                  onChange={(v) => patchSettings({ startView: v })}
-                />
-              </div>
-            </SettingsGroup>
-            <SectionHeader>Help</SectionHeader>
-            <SettingsGroup>
-              {isPc.value && (
-                <>
-                  <SettingsRow icon="keyboard" title="Keyboard shortcuts" subtitle={SHORTCUTS_SUMMARY} tint={Amber} onClick={() => (shortcutsOpen.value = true)} trailing={<Chevron />} />
-                  <GroupDivider />
-                </>
-              )}
-              <SettingsRow
-                icon="school"
-                title="Replay the tour"
-                tint={Accent}
-                onClick={() => {
-                  nav.closeKind('settings');
-                  setTimeout(() => window.dispatchEvent(new CustomEvent('nexus:start-tour')), 60);
-                }}
-              />
-            </SettingsGroup>
-            <SectionHeader>Reset</SectionHeader>
-            <SettingsGroup>
-              <SettingsRow icon="restart" title="Reset settings" subtitle="Every setting back to its default. Your tasks are not touched." tint={Red} titleColor={Red} onClick={() => setConfirmReset(true)} />
-            </SettingsGroup>
-          </>
-        );
+      case 'desk':
+        return <DeskSettings />;
 
       case 'notifications':
         return (
@@ -678,12 +744,8 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
               </InlineSetting>
             </SettingsGroup>
             <p class="nx-set-note">The same alert never rings twice, even with Nexus open on several devices.</p>
-          </>
-        );
 
-      case 'reminders':
-        return (
-          <>
+            <SectionHeader>Snooze</SectionHeader>
             <SettingsGroup>
               <SettingsRow icon="snooze" title="Snooze length" subtitle="Used by the Snooze button on notifications" tint={Blue} />
               <div class="nx-settings-seg">
@@ -816,7 +878,12 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
               </Collapse>
             </SettingsGroup>
 
-            <SectionHeader>Import & export</SectionHeader>
+          </>
+        );
+
+      case 'import':
+        return (
+          <>
             <SettingsGroup>
               <SettingsRow
                 icon="table"
@@ -838,7 +905,9 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
                   else nav.open({ kind: 'sheetImport', file: f });
                 }}
               />
-              <GroupDivider />
+            </SettingsGroup>
+            <SectionHeader>Linked Google Sheets</SectionHeader>
+            <SettingsGroup>
               <SettingsRow
                 icon="link"
                 title="Link a Google Sheet"
@@ -847,7 +916,9 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
                 onClick={() => nav.open({ kind: 'sheetImport' })}
               />
               <LinkedSheets />
-              <GroupDivider />
+            </SettingsGroup>
+            <SectionHeader>Export</SectionHeader>
+            <SettingsGroup>
               <SettingsRow
                 icon="event"
                 title="Put Nexus deadlines in your calendar"
@@ -865,6 +936,20 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
       case 'tasks':
         return (
           <>
+            <SettingsGroup>
+              <SettingsRow icon="today" title="Open Nexus on" subtitle="The first screen you see. The other one is one tap away." tint={Accent} />
+              <div class="nx-settings-seg">
+                <Segmented<StartView>
+                  options={[
+                    ['matrix', 'Matrix'],
+                    ['calendar', 'Calendar']
+                  ]}
+                  value={s.startView}
+                  onChange={(v) => patchSettings({ startView: v })}
+                />
+              </div>
+            </SettingsGroup>
+            <SectionHeader>Archived & deleted</SectionHeader>
             <SettingsGroup>
               <SettingsRow
                 icon="archive"
@@ -982,16 +1067,44 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
                 <span class="nx-slider-end">Strong</span>
               </div>
             </Collapse>
+            <GroupDivider />
+            <SettingsRow
+              icon="openInFull"
+              title="Motion"
+              subtitle={s.motion === 'reduced' ? 'Quick fades only · nothing slides, springs or bounces' : 'Springs and glides · follows your system’s reduce-motion setting too'}
+              tint={Accent}
+            />
+            <div class="nx-settings-seg">
+              <Segmented<MotionMode>
+                options={[
+                  ['full', 'Full'],
+                  ['reduced', 'Reduced']
+                ]}
+                value={s.motion}
+                onChange={(v) => patchSettings({ motion: v })}
+              />
+            </div>
           </SettingsGroup>
         );
 
-      case 'desktop': {
+      case 'devices': {
         const os = platform();
         const order: ('mac' | 'windows')[] = os === 'windows' ? ['windows', 'mac'] : ['mac', 'windows'];
         return (
           <>
-            {os !== 'other' && (
+            <SettingsGroup>
+              <SettingsRow
+                icon="qrScan"
+                title="Set up another device"
+                subtitle="Scan a code to copy your linked calendars and settings to a phone, tablet or computer"
+                tint={Accent}
+                onClick={() => nav.open({ kind: 'pair' })}
+                trailing={<Chevron />}
+              />
+            </SettingsGroup>
+            {os !== 'other' && !inNexusDesk() && (
               <>
+                <SectionHeader>Nexus Desk</SectionHeader>
                 <DeskCard os={order[0]} />
                 <details class="nx-desk-other">
                   <summary>Nexus Desk for {order[1] === 'mac' ? 'Mac' : 'Windows'}</summary>
@@ -1050,29 +1163,34 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
           </>
         );
 
-      case 'about':
+      case 'help':
         return (
           <>
             <SettingsGroup>
-              <SettingsRow icon="info" title={`Nexus ${APP_VERSION}`} subtitle={`${deviceCount} task${deviceCount === 1 ? '' : 's'} on this device`} tint={Accent} onClick={() => nav.open({ kind: 'about' })} trailing={<Chevron />} />
-              <GroupDivider />
-              <SettingsRow icon="bellRing" title="What's new" tint={Green} onClick={() => nav.open({ kind: 'changelog' })} trailing={<Chevron />} />
-              <GroupDivider />
+              {isPc.value && (
+                <>
+                  <SettingsRow icon="keyboard" title="Keyboard shortcuts" subtitle={SHORTCUTS_SUMMARY} tint={Amber} onClick={() => (shortcutsOpen.value = true)} trailing={<Chevron />} />
+                  <GroupDivider />
+                </>
+              )}
               <SettingsRow
                 icon="school"
                 title="Replay the tour"
+                subtitle="Walk through the matrix again"
                 tint={Accent}
                 onClick={() => {
                   nav.closeKind('settings');
                   setTimeout(() => window.dispatchEvent(new CustomEvent('nexus:start-tour')), 60);
                 }}
               />
-              {isPc.value && (
-                <>
-                  <GroupDivider />
-                  <SettingsRow icon="keyboard" title="Keyboard shortcuts" subtitle={SHORTCUTS_SUMMARY} tint={Amber} onClick={() => (shortcutsOpen.value = true)} trailing={<Chevron />} />
-                </>
-              )}
+              <GroupDivider />
+              <SettingsRow icon="bellRing" title="What's new" tint={Green} onClick={() => nav.open({ kind: 'changelog' })} trailing={<Chevron />} />
+              <GroupDivider />
+              <SettingsRow icon="info" title={`About Nexus ${APP_VERSION}`} subtitle={`${deviceCount} task${deviceCount === 1 ? '' : 's'} on this device`} tint={Accent} onClick={() => nav.open({ kind: 'about' })} trailing={<Chevron />} />
+            </SettingsGroup>
+            <SectionHeader>Reset</SectionHeader>
+            <SettingsGroup>
+              <SettingsRow icon="restart" title="Reset settings" subtitle="Every setting back to its default. Your tasks are not touched." tint={Red} titleColor={Red} onClick={() => setConfirmReset(true)} />
             </SettingsGroup>
           </>
         );
@@ -1091,7 +1209,7 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
             <div key={label}>
               <SectionHeader>{label}</SectionHeader>
               <SettingsGroup>
-                {ids.map((id, i) => (
+                {visibleCats(ids).filter((id) => id !== 'account').map((id, i) => (
                   <div key={id}>
                     {i > 0 && <GroupDivider />}
                     {catRow(catOf(id)!)}
@@ -1117,7 +1235,7 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
             {GROUPS.map(([label, ids]) => (
               <div key={label} class="grp">
                 <span class="glabel">{label}</span>
-                {ids.map((id) => {
+                {visibleCats(ids).filter((id) => id !== 'account').map((id) => {
                   const c = catOf(id)!;
                   return (
                     <button key={id} class={`press ${current === id ? 'on' : ''}`} aria-current={current === id ? 'page' : undefined} onClick={() => openCat(id)}>
@@ -1130,7 +1248,7 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
             ))}
             <p class="nx-settings-footer">Nexus v{APP_VERSION}</p>
           </nav>
-          <div ref={scroller} class="nx-page-scroll narrow nx-set-scroll">
+          <div ref={scroller} class="nx-page-scroll narrow nx-set-scroll" data-cat={current}>
             <header class="nx-set-head">
               <IconTile icon={catOf(current)!.icon} tint={catOf(current)!.tint} size={36} />
               <div>
@@ -1149,7 +1267,7 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
           <p>Long-press your home screen → Widgets → Nexus. Pick Matrix, Today, Quick add, Next up or a single quadrant. Tick tasks off right from the widget.</p>
           <h3>Mac</h3>
           <p>
-            Install Nexus Desk (Settings → Desktop & widgets): a menu-bar app whose small Nexus window floats over your apps or sits on the desktop like a widget, with a
+            Install Nexus Desk (Settings → Devices): a menu-bar app whose small Nexus window floats over your apps or sits on the desktop like a widget, with a
             hot corner to show or hide it. Without installing anything, the Mini window (M) also floats on top in Chrome, Edge and Brave.
           </p>
           <h3>Windows</h3>
@@ -1184,8 +1302,8 @@ export function SettingsPage(p: LayerProps & { cat?: string }) {
           </>
         }
       >
-        Theme, text size, haptics, start screen, notification, reminder, calendar, check-in and auto-delete settings go back to defaults. Tasks, your account and linked calendars
-        stay.
+        Theme, text size, haptics, motion, start screen, notification, reminder, calendar, check-in and auto-delete settings go back to defaults. Tasks, your account and linked
+        calendars stay.
       </Dialog>
 
       <Dialog

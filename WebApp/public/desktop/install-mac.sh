@@ -83,6 +83,21 @@ pb "Add :CFBundleDisplayName string Nexus Desk"
 pb "Add :LSUIElement bool true"
 pb "Set :LSUIElement true"
 pb "Add :NSHighResolutionCapable bool true"
+# Services menu: select text in any app → Services → Add to Nexus (the app answers addToNexus:).
+pb "Add :NSServices array"
+pb "Add :NSServices:0 dict"
+pb "Add :NSServices:0:NSMenuItem dict"
+pb "Add :NSServices:0:NSMenuItem:default string 'Add to Nexus'"
+pb "Add :NSServices:0:NSMessage string addToNexus"
+pb "Add :NSServices:0:NSPortName string 'Nexus Desk'"
+pb "Add :NSServices:0:NSSendTypes array"
+pb "Add :NSServices:0:NSSendTypes:0 string NSStringPboardType"
+# nexus:// links (Shortcuts.app, Raycast, Alfred, browsers): nexus://add?text=… · nexus://open?task=…
+pb "Add :CFBundleURLTypes array"
+pb "Add :CFBundleURLTypes:0 dict"
+pb "Add :CFBundleURLTypes:0:CFBundleURLName string $BUNDLE_ID.link"
+pb "Add :CFBundleURLTypes:0:CFBundleURLSchemes array"
+pb "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string nexus"
 
 if [ -s "$TMP/icon.png" ] && command -v iconutil >/dev/null; then
   SET="$TMP/applet.iconset"
@@ -101,6 +116,10 @@ fi
 
 # Built on this Mac, so a local (ad-hoc) signature is all macOS needs.
 codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
+# Tell macOS about the nexus:// scheme and the Services entry right away (otherwise they appear
+# only after Finder notices the new app).
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" >/dev/null 2>&1 || true
+/System/Library/CoreServices/pbs -update >/dev/null 2>&1 || true
 
 if [ "$LOGIN" = 1 ]; then
   mkdir -p "$(dirname "$AGENT")"
@@ -117,8 +136,11 @@ fi
 
 open "$APP"
 say "Nexus Desk is running — click the Nexus icon in the menu bar."
+echo "  · ⌃⌥N from any app opens Quick Add (Shortcut ▸ Change shortcut… to pick your own)"
+echo "  · Open full Nexus: the whole app in its own window, same sign-in"
 echo "  · Window ▸ float on top, sit on the desktop, size, transparency"
 echo "  · Hot corner ▸ show / hide Nexus from a screen corner"
+echo "  · Select text in any app → Services → Add to Nexus; nexus://add?text=… links work too"
 echo "  · First time: sign in with Google inside the Nexus window to see your tasks."
 if [ "$LOGIN" = 1 ]; then echo "  · Starts at login (turn off from the menu)."; fi
 exit 0

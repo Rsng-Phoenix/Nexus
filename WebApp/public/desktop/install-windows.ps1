@@ -68,5 +68,7 @@ Start-Process -WindowStyle Hidden -FilePath "$env:WINDIR\System32\WindowsPowerSh
 
 Say 'Nexus Desk is running. Look for the Nexus icon in the tray (^ next to the clock).'
 Write-Host '  - Left-click: show / hide Nexus.  Right-click: keep on top, size, hot corner, start with Windows.'
+Write-Host '  - Ctrl+Alt+N from any app opens Quick Add (right-click > Shortcut > Change shortcut... to pick your own).'
+Write-Host '  - Right-click > Open full Nexus: the whole app in its own window, signed in as in your browser.'
 Write-Host '  - It uses your browser (Edge, Chrome or Brave), so you stay signed in as you are there.'
 Write-Host '  - Windows 11 widgets board: open Nexus in Edge > ... > Apps > Install, then Win + W > Add widgets > Nexus.'

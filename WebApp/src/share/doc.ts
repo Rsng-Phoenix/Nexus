@@ -50,6 +50,7 @@ function noteLines(blocks: NoteBlock[]): ShareLine[] {
     if (b.type === 'CHECKBOX') out.push({ kind: 'check', text, checked: b.checked, indent });
     else if (b.type === 'BULLET') out.push({ kind: 'bullet', text, indent });
     else if (b.type === 'NUMBERED') out.push({ kind: 'num', text, n: numberedIndexInRun(blocks, i), indent });
+    else if (b.type === 'IMAGE') out.push({ kind: 'text', text: '[image]', indent, bold: false });
     else out.push({ kind: 'text', text, indent, bold: b.bold });
   });
   while (out.length && out[out.length - 1].kind === 'gap') out.pop();
