@@ -473,7 +473,7 @@ function fetchIcs(message) {
     if (!icsHostOk(resp.URL)) return reply(id, 502, '', 'redirected off host');
     const status = Number(resp.statusCode);
     if (status !== 200) return reply(id, status, '', 'calendar unreachable');
-    if (data.length > ICS_MAX_BYTES) return reply(id, 413, '', 'calendar too large');
+    if (Number(data.length) > ICS_MAX_BYTES) return reply(id, 413, '', 'calendar too large');
     const text = ObjC.unwrap($.NSString.alloc.initWithDataEncoding(data, 4)) || '';
     if (!/BEGIN:VCALENDAR/i.test(text.slice(0, 2048))) return reply(id, 422, '', 'not a calendar');
     reply(id, 200, text, '');
@@ -557,7 +557,9 @@ function webCryptoKey() {
   const dir = $.NSHomeDirectory().js + '/Library/Application Support/Nexus Desk';
   const path = dir + '/webcrypto.key';
   const saved = $.NSData.dataWithContentsOfFile($(path));
-  if (!saved.isNil() && saved.length === 16) return (cryptoKeyData = saved);
+  // NSData.length comes back from the bridge as a string ("16"): compare as a number, or a
+  // fresh key replaces the saved one on every launch and the stored Google sign-in can't be read.
+  if (!saved.isNil() && Number(saved.length) === 16) return (cryptoKeyData = saved);
   files.createDirectoryAtPathWithIntermediateDirectoriesAttributesError($(dir), true, $({ NSFilePosixPermissions: 448 }), null); // 0700
   const fresh = $.NSFileHandle.fileHandleForReadingAtPath($('/dev/urandom')).readDataOfLength(16);
   files.createFileAtPathContentsAttributes($(path), fresh, $({ NSFilePosixPermissions: 384 })); // 0600
