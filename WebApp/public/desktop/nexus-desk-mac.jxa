@@ -4,6 +4,7 @@
 //   · Float on top of every app, sit on the desktop like a widget, or behave like a normal window
 //   · A hot corner that shows / hides it (pick any corner, or none)
 //   · Size presets, transparency, hide when you click elsewhere, start at login
+//   · Reminders as real macOS notifications, and ⌃⌥N from any app to add a task
 //
 // No App Store, no Xcode: install-mac.sh compiles this file into "Nexus Desk.app" with the
 // osacompile tool that ships with macOS. It talks only to the Nexus web app's address below.
@@ -11,6 +12,8 @@
 
 ObjC.import('Cocoa');
 ObjC.import('WebKit');
+ObjC.import('UserNotifications');
+ObjC.import('Carbon');
 
 const NEXUS_URL = '__NEXUS_URL__';
 const WIDGET_URL = NEXUS_URL + '?mode=widget';
@@ -55,6 +58,9 @@ const BROWSERS = [
   ['org.mozilla.firefox', 'Firefox'],
   ['com.apple.Safari', 'Safari']
 ];
+// ⌃⌥N from any app: show Nexus with the add field ready. A Carbon hot key needs no Accessibility
+// permission and costs nothing until pressed.
+const HOTKEY = { keyCode: 45 /* N */, modifiers: 0x1000 | 0x0800 /* control + option */, label: '⌃⌥N' };
 const HOT_CORNER_DWELL_MS = 250;
 // The hot corner is a 4-pixel tripwire window in the corner that macOS itself watches: no polling,
 // so Nexus Desk uses no CPU until the pointer actually arrives there.
@@ -78,6 +84,8 @@ let calPanel = null;
 let calWeb = null;
 let corners = [];
 let dwellTimer = null;
+let hotKeyRef = null;
+let noteCenter = null;
 
 // ─── Window ────────────────────────────────────────────────────────────────
 
@@ -112,7 +120,7 @@ function mainUrl() {
 }
 
 /** One Nexus window: a slim panel with the web app inside, remembering its own place and size. */
-function makeWindow(title, url, autosave, offsetY) {
+function makeWindow(title, url, autosave, offsetY, notify) {
   const rect = $.NSMakeRect(0, 0, 380, 600);
   // titled · closable · resizable · utility (slim title bar)
   const p = $.NSPanel.alloc.initWithContentRectStyleMaskBackingDefer(rect, 1 | 2 | 8 | 16, 2, false);
@@ -131,6 +139,8 @@ function makeWindow(title, url, autosave, offsetY) {
   cfg.preferences.javaScriptCanOpenWindowsAutomatically = true;
   // Linked calendars: the page asks, this app fetches (see fetchIcs).
   cfg.userContentController.addScriptMessageHandlerName(controller, 'nexusIcs');
+  // Reminders: the page decides what rings and when; this app shows it (see showNote).
+  if (notify) cfg.userContentController.addScriptMessageHandlerName(controller, 'nexusNotify');
   const w = $.WKWebView.alloc.initWithFrameConfiguration(p.contentView.bounds, cfg);
   w.autoresizingMask = 2 | 16; // follow the window's width and height
   w.customUserAgent = USER_AGENT;
@@ -143,7 +153,7 @@ function makeWindow(title, url, autosave, offsetY) {
 }
 
 function makePanel() {
-  const m = makeWindow('Nexus', mainUrl(), 'NexusDeskPanel', 0);
+  const m = makeWindow('Nexus', mainUrl(), 'NexusDeskPanel', 0, true);
   panel = m.p;
   web = m.w;
   if (pref('calWindow', false)) makeCalendarWindow();
@@ -324,6 +334,7 @@ function buildMenu() {
 
   const toggleItem = item(isShown() ? 'Hide Nexus' : 'Show Nexus', 'toggle:', 'n');
   m.addItem(toggleItem);
+  m.addItem(item('New task…' + (hotKeyRef ? '   ' + HOTKEY.label : ''), 'quickAdd:'));
   targetList = openTargets();
   const current = openTarget();
   m.addItem(item('Open full Nexus', 'openFull:', 'o'));
@@ -402,6 +413,13 @@ function buildMenu() {
   cornerRoot.submenu = cornerMenu;
   m.addItem(cornerRoot);
 
+  const noteItem = item('Reminders as Mac notifications', 'toggleNotify:');
+  noteItem.state = pref('notify', true) ? 1 : 0;
+  m.addItem(noteItem);
+  m.addItem(item('Notification settings…', 'notifySettings:'));
+  const keyItem = item(HOTKEY.label + ' adds a task from any app', 'toggleHotKey:');
+  keyItem.state = hotKeyRef ? 1 : 0;
+  m.addItem(keyItem);
   const login = item('Start at login', 'toggleLogin:');
   login.state = loginEnabled() ? 1 : 0;
   m.addItem(login);
@@ -455,12 +473,74 @@ function fetchIcs(message) {
     if (!icsHostOk(resp.URL)) return reply(id, 502, '', 'redirected off host');
     const status = Number(resp.statusCode);
     if (status !== 200) return reply(id, status, '', 'calendar unreachable');
-    if (data.length > ICS_MAX_BYTES) return reply(id, 413, '', 'calendar too large');
+    if (Number(data.length) > ICS_MAX_BYTES) return reply(id, 413, '', 'calendar too large');
     const text = ObjC.unwrap($.NSString.alloc.initWithDataEncoding(data, 4)) || '';
     if (!/BEGIN:VCALENDAR/i.test(text.slice(0, 2048))) return reply(id, 422, '', 'not a calendar');
     reply(id, 200, text, '');
   });
   task.resume;
+}
+
+// ─── Reminders as macOS notifications ────────────────────────────────────────
+
+// Callbacks from the notification center arrive on a background thread, where touching any
+// Cocoa object crashes JXA: they are empty on purpose, and nothing here needs their answer.
+function notifyCenter() {
+  if (noteCenter) return noteCenter;
+  try {
+    const c = $.UNUserNotificationCenter.currentNotificationCenter;
+    noteCenter = c.isNil() ? null : c;
+  } catch (e) {
+    noteCenter = null;
+  }
+  return noteCenter;
+}
+
+/** macOS asks once ("Nexus Desk would like to send notifications"); later calls are silent. */
+function askNotifyPermission() {
+  const c = notifyCenter();
+  if (!c || !pref('notify', true)) return;
+  c.requestAuthorizationWithOptionsCompletionHandler(4 | 2 | 1, () => {}); // alert · sound · badge
+}
+
+/** A message from the page: {show: {id, title, body, silent}}. Same id = replaces the old one. */
+function deskNote(message) {
+  let m;
+  try {
+    m = ObjC.deepUnwrap(message.body) || {};
+  } catch (e) {
+    return;
+  }
+  const n = m.show;
+  const c = notifyCenter();
+  if (!n || !c || !pref('notify', true)) return;
+  const content = $.UNMutableNotificationContent.alloc.init;
+  content.title = $(String(n.title || 'Nexus').slice(0, 200));
+  content.body = $(String(n.body || '').slice(0, 600));
+  content.threadIdentifier = $('nexus');
+  if (!n.silent) content.sound = $.UNNotificationSound.defaultSound;
+  const req = $.UNNotificationRequest.requestWithIdentifierContentTrigger($(String(n.id || 'nexus').slice(0, 200)), content, $());
+  c.addNotificationRequestWithCompletionHandler(req, () => {}); // a null block crashes JXA
+}
+
+// ─── ⌃⌥N from any app ──────────────────────────────────────────────────────────
+
+function setHotKey(on) {
+  if (hotKeyRef) {
+    $.UnregisterEventHotKey(hotKeyRef[0]);
+    hotKeyRef = null;
+  }
+  if (!on) return;
+  const ref = Ref();
+  const id = { signature: 0x4e584453 /* 'NXDS' */, id: 1 };
+  if ($.RegisterEventHotKey(HOTKEY.keyCode, HOTKEY.modifiers, id, $.GetApplicationEventTarget(), 0, ref) === 0) hotKeyRef = ref;
+}
+
+/** Show Nexus with the add field focused, whatever app you were in. */
+function quickAdd() {
+  show();
+  panel.makeFirstResponder(web);
+  web.evaluateJavaScriptCompletionHandler($('window.__nexusQuickAdd&&window.__nexusQuickAdd()'), () => {});
 }
 
 // ─── Web Crypto key (no keychain prompts) ────────────────────────────────────
@@ -477,7 +557,9 @@ function webCryptoKey() {
   const dir = $.NSHomeDirectory().js + '/Library/Application Support/Nexus Desk';
   const path = dir + '/webcrypto.key';
   const saved = $.NSData.dataWithContentsOfFile($(path));
-  if (!saved.isNil() && saved.length === 16) return (cryptoKeyData = saved);
+  // NSData.length comes back from the bridge as a string ("16"): compare as a number, or a
+  // fresh key replaces the saved one on every launch and the stored Google sign-in can't be read.
+  if (!saved.isNil() && Number(saved.length) === 16) return (cryptoKeyData = saved);
   files.createDirectoryAtPathWithIntermediateDirectoriesAttributesError($(dir), true, $({ NSFilePosixPermissions: 448 }), null); // 0700
   const fresh = $.NSFileHandle.fileHandleForReadingAtPath($('/dev/urandom')).readDataOfLength(16);
   files.createFileAtPathContentsAttributes($(path), fresh, $({ NSFilePosixPermissions: 384 })); // 0600
@@ -503,7 +585,7 @@ ObjC.registerSubclass({
     '_webCryptoMasterKeyForWebView:': { types: ['id', ['id']], implementation: () => webCryptoKey() },
     'userContentController:didReceiveScriptMessage:': {
       types: ['void', ['id', 'id']],
-      implementation: (_ucc, message) => fetchIcs(message)
+      implementation: (_ucc, message) => (message.name.js === 'nexusNotify' ? deskNote(message) : fetchIcs(message))
     },
     'menuNeedsUpdate:': {
       types: ['void', ['id']],
@@ -519,6 +601,35 @@ ObjC.registerSubclass({
       }
     },
     'toggle:': { types: ['void', ['id']], implementation: () => toggle() },
+    'quickAdd:': { types: ['void', ['id']], implementation: () => quickAdd() },
+    'toggleNotify:': {
+      types: ['void', ['id']],
+      implementation: () => {
+        const on = !pref('notify', true);
+        setPref('notify', on);
+        if (on) askNotifyPermission();
+      }
+    },
+    'notifySettings:': {
+      types: ['void', ['id']],
+      implementation: () =>
+        $.NSWorkspace.sharedWorkspace.openURL($.NSURL.URLWithString('x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=' + AGENT_LABEL))
+    },
+    'toggleHotKey:': {
+      types: ['void', ['id']],
+      implementation: () => {
+        const on = !hotKeyRef;
+        setPref('hotkey', on);
+        setHotKey(on);
+      }
+    },
+    // Clicking one of Nexus's notifications brings the app forward: show the window too.
+    'becameActive:': {
+      types: ['void', ['id']],
+      implementation: () => {
+        if (panel && !isShown()) show();
+      }
+    },
     'openFull:': { types: ['void', ['id']], implementation: () => openFull() },
     'setOpenIn:': {
       types: ['void', ['id']],
@@ -690,6 +801,7 @@ function installMainMenu() {
   main.addItem(editItem);
   const viewItem = $.NSMenuItem.alloc.init;
   const view = $.NSMenu.alloc.initWithTitle('View');
+  view.addItem(item('New Task', 'quickAdd:', 'n'));
   view.addItem(item('Reload', 'reload:', 'r'));
   viewItem.submenu = view;
   main.addItem(viewItem);
@@ -716,6 +828,14 @@ function run() {
   statusItem.menu = menu;
   show();
   rebuildCorners();
+  askNotifyPermission();
+  setHotKey(pref('hotkey', true));
+  // The hot key arrives as a "system defined" event (subtype 6 = pressed) on the main thread.
+  $.NSEvent.addLocalMonitorForEventsMatchingMaskHandler(1 << 14, (e) => {
+    if (hotKeyRef && Number(e.subtype) === 6) quickAdd();
+    return e;
+  });
+  $.NSNotificationCenter.defaultCenter.addObserverSelectorNameObject(controller, 'becameActive:', 'NSApplicationDidBecomeActiveNotification', $());
   // Displays plugged in, removed or rearranged: move the tripwires with them.
   $.NSNotificationCenter.defaultCenter.addObserverSelectorNameObject(controller, 'screensChanged:', 'NSApplicationDidChangeScreenParametersNotification', $());
 }

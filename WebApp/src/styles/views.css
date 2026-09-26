@@ -301,3 +301,42 @@ kbd { display: inline-grid; place-items: center; min-width: 18px; height: 18px; 
   .nx-brand small { display: none; }
   .nx-topbar { gap: 6px; }
 }
+
+/* ─── Smart add: chips under the title, hint line, "Added" beat ─────────────────── */
+.nx-add-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0; }
+.nx-add-chip { --chip: var(--c); display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 1.3; color: var(--chip); background: color-mix(in srgb, var(--chip) 13%, transparent); border: 1px solid color-mix(in srgb, var(--chip) 32%, transparent); }
+.nx-add-chip .x { opacity: 0.5; margin-left: 1px; }
+.nx-add-chip:hover { background: color-mix(in srgb, var(--chip) 22%, transparent); }
+.nx-add-chip:hover .x { opacity: 1; }
+.nx-add-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-height: 18px; padding: 2px 0 0; font-size: 11px; color: var(--nx-textTer); }
+.nx-add-hint span { display: inline-flex; align-items: center; gap: 4px; }
+.nx-add-hint .try { color: var(--nx-textSec); font-style: italic; }
+.nx-add-hint.added { color: var(--nx-none); font-weight: 600; }
+
+/* ─── Keyboard highlight on the matrix (view/keynav.ts) ─────────────────────────── */
+.nx-task.focused, .nx-folder-row.focused { outline: 2px solid var(--c); outline-offset: -2px; background: color-mix(in srgb, var(--c) 12%, var(--nx-surfaceEl)); }
+.nx-task.focused.done { opacity: 0.6; }
+
+/* ─── Command palette (⌘K) ──────────────────────────────────────────────────────── */
+.nx-palette-layer { justify-content: flex-start; align-items: center; padding-top: max(12vh, 64px); }
+.nx-palette-scrim { background: rgba(0, 0, 0, 0.38); backdrop-filter: blur(14px) saturate(1.2); -webkit-backdrop-filter: blur(14px) saturate(1.2); }
+.nx-palette { position: relative; width: min(600px, calc(100% - 32px)); max-height: min(72vh, 580px); display: flex; flex-direction: column; border-radius: 20px; background: color-mix(in srgb, var(--nx-surfaceEl) 94%, transparent); border: 1px solid var(--nx-stroke); box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5); overflow: hidden; will-change: transform, opacity; }
+.nx-palette-input { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--nx-stroke); color: var(--nx-textSec); }
+.nx-palette-input input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font-size: 17px; color: var(--nx-textPri); }
+.nx-palette-input input::placeholder { color: var(--nx-textTer); }
+.nx-palette-list { flex: 1; min-height: 0; overflow-y: auto; padding: 6px; overscroll-behavior: contain; }
+.nx-palette-sec { padding: 8px 10px 4px; font-size: 10.5px; font-weight: 600; letter-spacing: 1.4px; text-transform: uppercase; color: var(--nx-textTer); }
+.nx-palette-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border-radius: 12px; font-size: 14px; color: var(--nx-textPri); text-align: left; }
+.nx-palette-row.on { background: color-mix(in srgb, var(--nx-accent) 14%, transparent); }
+.nx-palette-row .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c); flex: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 18%, transparent); }
+.nx-palette-row .ic { width: 22px; flex: none; display: grid; place-items: center; color: var(--nx-textSec); }
+.nx-palette-row .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nx-palette-row .hint { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--nx-textTer); }
+.nx-palette-empty { padding: 28px 16px; text-align: center; font-size: 13px; color: var(--nx-textSec); }
+.nx-palette-foot { display: flex; gap: 16px; justify-content: center; padding: 8px; border-top: 1px solid var(--nx-stroke); font-size: 11px; color: var(--nx-textTer); }
+.nx-palette-foot span { display: inline-flex; align-items: center; gap: 3px; }
+@media (max-width: 600px) { .nx-palette-row .hint kbd { display: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .nx-palette-scrim { backdrop-filter: none; -webkit-backdrop-filter: none; background: rgba(0, 0, 0, 0.55); }
+  .nx-task.focused, .nx-folder-row.focused { transition: none; }
+}

@@ -157,6 +157,8 @@ export async function hasRefreshToken(): Promise<boolean> {
 }
 
 let refreshing: Promise<TokenSet | 'revoked' | null> | null = null;
+/** Waits between refresh attempts when the network or the relay hiccups. */
+const REFRESH_RETRIES = [1500, 5000, 12_000];
 
 /** A fresh 1-hour token without any popup. 'revoked' = the user removed access; sign in again. */
 export function refreshAccessToken(): Promise<TokenSet | 'revoked' | null> {
@@ -164,20 +166,32 @@ export function refreshAccessToken(): Promise<TokenSet | 'revoked' | null> {
     const rt = await loadRefreshToken();
     if (!rt || !PUSH_WORKER_URL) return null;
     try {
-      const res = await fetch(`${PUSH_WORKER_URL}/oauth/refresh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: rt })
-      });
-      const out = (await res.json().catch(() => ({}))) as Partial<TokenSet> & { error?: string };
-      if (res.status === 400 && (out.error === 'invalid_grant' || out.error === 'unauthorized_client')) {
-        await clearRefreshToken();
-        return 'revoked';
+      // Waking from sleep or switching Wi-Fi, the first request often fails: try a few times
+      // before calling it a problem. Only Google saying the grant is gone signs you out.
+      for (let attempt = 0; ; attempt++) {
+        let retry = false;
+        try {
+          const res = await fetch(`${PUSH_WORKER_URL}/oauth/refresh`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refresh_token: rt }),
+            signal: AbortSignal.timeout(15_000)
+          });
+          const out = (await res.json().catch(() => ({}))) as Partial<TokenSet> & { error?: string };
+          if (res.status === 400 && (out.error === 'invalid_grant' || out.error === 'unauthorized_client')) {
+            await clearRefreshToken();
+            return 'revoked';
+          }
+          if (res.ok && out.access_token) {
+            return { access_token: out.access_token, expires_in: Number(out.expires_in ?? 3600), scope: out.scope ?? '' };
+          }
+          retry = res.status === 429 || res.status >= 500;
+        } catch {
+          retry = true; // offline or timed out
+        }
+        if (!retry || attempt >= REFRESH_RETRIES.length) return null; // try again later, stay signed in
+        await new Promise((r) => setTimeout(r, REFRESH_RETRIES[attempt]));
       }
-      if (!res.ok || !out.access_token) return null;
-      return { access_token: out.access_token, expires_in: Number(out.expires_in ?? 3600), scope: out.scope ?? '' };
-    } catch {
-      return null; // offline: try again later, stay signed in
     } finally {
       refreshing = null;
     }

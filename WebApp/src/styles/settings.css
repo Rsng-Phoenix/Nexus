@@ -155,3 +155,7 @@
 .nx-sheets-opt span { flex: 1; display: flex; flex-direction: column; gap: 2px; }
 .nx-sheets-opt b { font-size: 14px; color: var(--nx-textPri); }
 .nx-sheets-opt small { font-size: 12px; line-height: 1.4; color: var(--nx-textSec); }
+.nx-keys-groups { display: flex; flex-direction: column; gap: 14px; }
+.nx-keys-groups h4 { font-size: 11px; font-weight: 600; letter-spacing: 1.4px; text-transform: uppercase; color: var(--nx-textTer); margin-bottom: 6px; }
+.nx-keys-groups .nx-keys dt { min-width: 112px; flex-wrap: wrap; }
+.nx-keys-note { font-size: 12px; line-height: 1.45; color: var(--nx-textSec); padding-top: 4px; border-top: 1px solid var(--nx-stroke); }

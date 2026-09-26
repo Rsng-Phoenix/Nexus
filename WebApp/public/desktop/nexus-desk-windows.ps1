@@ -6,6 +6,7 @@
 #   - A hot corner that shows / hides it (pick any corner, or none)
 #   - What the main window shows, and an optional separate calendar window
 #   - Size presets, start with Windows, uninstall
+#   - Ctrl+Alt+N from any app: Nexus comes forward with the add field ready
 #
 # Installed by install-windows.ps1 into %LOCALAPPDATA%\NexusDesk. Settings: settings.json there.
 # Plain PowerShell 5.1 + Windows Forms that ship with Windows: nothing else is installed.
@@ -70,6 +71,23 @@ public static class NexusWin {
   }
 }
 
+/// Ctrl+Alt+N from any app. A registered hot key: Windows tells us, nothing is polled.
+public class NexusHotKey : System.Windows.Forms.NativeWindow, IDisposable {
+  [DllImport("user32.dll")] static extern bool RegisterHotKey(IntPtr h, int id, uint mods, uint vk);
+  [DllImport("user32.dll")] static extern bool UnregisterHotKey(IntPtr h, int id);
+  public event EventHandler Pressed;
+  public bool Registered;
+  public NexusHotKey() { CreateHandle(new System.Windows.Forms.CreateParams()); }
+  // MOD_ALT | MOD_CONTROL | MOD_NOREPEAT, and the N key.
+  public bool Register() { if (!Registered) Registered = RegisterHotKey(Handle, 1, 0x0001 | 0x0002 | 0x4000, 0x4E); return Registered; }
+  public void Unregister() { if (Registered) UnregisterHotKey(Handle, 1); Registered = false; }
+  protected override void WndProc(ref System.Windows.Forms.Message m) {
+    if (m.Msg == 0x0312) { var p = Pressed; if (p != null) p(this, EventArgs.Empty); } // WM_HOTKEY
+    base.WndProc(ref m);
+  }
+  public void Dispose() { Unregister(); DestroyHandle(); }
+}
+
 /// Hot corner, checked in compiled code: PowerShell only runs when the corner is actually hit.
 /// The timer runs only while a corner is chosen.
 public class CornerWatcher {
@@ -98,11 +116,11 @@ public class CornerWatcher {
 
 # --- Settings ---------------------------------------------------------------
 
-$script:Cfg = [ordered]@{ onTop = $true; corner = 'off'; browser = ''; welcomed = $false; mainView = 'tabs'; calWindow = $false }
+$script:Cfg = [ordered]@{ onTop = $true; corner = 'off'; browser = ''; welcomed = $false; mainView = 'tabs'; calWindow = $false; hotKey = $true }
 if (Test-Path $SettingsPath) {
   try {
     $saved = Get-Content $SettingsPath -Raw | ConvertFrom-Json
-    foreach ($k in @('onTop', 'corner', 'browser', 'welcomed', 'mainView', 'calWindow')) { if ($null -ne $saved.$k) { $script:Cfg[$k] = $saved.$k } }
+    foreach ($k in @('onTop', 'corner', 'browser', 'welcomed', 'mainView', 'calWindow', 'hotKey')) { if ($null -ne $saved.$k) { $script:Cfg[$k] = $saved.$k } }
   } catch { }
 }
 function Save-Settings { $script:Cfg | ConvertTo-Json | Set-Content -Path $SettingsPath -Encoding UTF8 }
@@ -204,6 +222,18 @@ function Toggle-Widget {
   }
 }
 
+# The page focuses its add field when it gets an "n" (and it isn't typing somewhere already).
+function Quick-Add {
+  $h = Get-Widget
+  $fresh = $h -eq [IntPtr]::Zero
+  Show-Widget
+  $h = Get-Widget
+  if ($h -eq [IntPtr]::Zero) { return }
+  Start-Sleep -Milliseconds $(if ($fresh) { 1500 } else { 250 })
+  [NexusWin]::SetForegroundWindow($h) | Out-Null
+  if ([NexusWin]::GetForegroundWindow() -eq $h) { [System.Windows.Forms.SendKeys]::SendWait('n') }
+}
+
 # --- Start with Windows -----------------------------------------------------
 
 function New-Link($path) {
@@ -236,6 +266,8 @@ $menu = New-Object System.Windows.Forms.ContextMenuStrip
 $miShow = $menu.Items.Add('Show / hide Nexus')
 $miShow.Font = New-Object System.Drawing.Font($miShow.Font, [System.Drawing.FontStyle]::Bold)
 $miShow.add_Click({ Toggle-Widget })
+$miAdd = $menu.Items.Add('New task    Ctrl+Alt+N')
+$miAdd.add_Click({ Quick-Add })
 $miFull = $menu.Items.Add('Open full Nexus')
 # The same browser as the widget, so you're signed in the same way.
 $miFull.add_Click({ $exe = Find-Browser; if ($exe) { Start-Process -FilePath $exe -ArgumentList @($NexusUrl) } else { Start-Process $NexusUrl } })
@@ -310,6 +342,16 @@ $hint = $miCorner.DropDownItems.Add('Push the pointer into the corner to show or
 $hint.Enabled = $false
 $menu.Items.Add($miCorner) | Out-Null
 
+$miKey = New-Object System.Windows.Forms.ToolStripMenuItem('Ctrl+Alt+N adds a task from any app')
+$miKey.Checked = [bool]$script:Cfg.hotKey
+$miKey.add_Click({
+  $script:Cfg.hotKey = -not [bool]$script:Cfg.hotKey
+  if ($script:Cfg.hotKey) { [void]$hotKey.Register() } else { $hotKey.Unregister() }
+  $miKey.Checked = $hotKey.Registered
+  Save-Settings
+})
+$menu.Items.Add($miKey) | Out-Null
+
 $miStart = New-Object System.Windows.Forms.ToolStripMenuItem('Start with Windows')
 $miStart.Checked = (Test-Path $StartupLink)
 $miStart.add_Click({
@@ -344,6 +386,14 @@ $watcher = New-Object CornerWatcher
 $watcher.add_Hit({ Toggle-Widget })
 $watcher.SetCorner($script:Cfg.corner)
 
+# --- Ctrl+Alt+N -------------------------------------------------------------
+
+$hotKey = New-Object NexusHotKey
+$hotKey.add_Pressed({ Quick-Add })
+# Another app may already own the combination: the menu item then shows unticked.
+if ([bool]$script:Cfg.hotKey) { [void]$hotKey.Register() }
+$miKey.Checked = $hotKey.Registered
+
 $ErrorActionPreference = 'Continue'
 Show-Widget
 if (-not $script:Cfg.welcomed) {
@@ -354,5 +404,6 @@ if (-not $script:Cfg.welcomed) {
 }
 [System.Windows.Forms.Application]::Run()
 $watcher.SetCorner('off')
+$hotKey.Dispose()
 $tray.Dispose()
 $mutex.ReleaseMutex()

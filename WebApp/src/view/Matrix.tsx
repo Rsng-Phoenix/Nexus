@@ -12,6 +12,7 @@ import { Icon } from './icons';
 import { Checkbox, CountBadge } from './kit';
 import { flip, measure } from './motion';
 import { tour } from './tour-state';
+import { matrixFocus } from './keynav';
 
 /** Quadrant the dragged item is over (task drag or FAB drag). Drives the lift highlight. */
 export const dropTarget = signal<Priority | null>(null);
@@ -57,6 +58,9 @@ function Quadrant({ priority }: { priority: Priority }) {
     before.current = measure(list.current);
   }, [ids]);
   const isDrop = dropTarget.value === priority;
+  // Keyboard highlight (view/keynav.ts): row index, the folder row counting as the last one.
+  const f = matrixFocus.value;
+  const focusIdx = f?.priority === priority ? Math.min(f.index, tasks.length + (folder.length ? 1 : 0) - 1) : -1;
   const openFull = () => {
     if (!tour.allows('EXPAND', priority)) return;
     if (nav.top.value) return; // something is already open on top of the matrix
@@ -78,22 +82,33 @@ function Quadrant({ priority }: { priority: Priority }) {
         {tasks.length === 0 && folder.length === 0 ? (
           <div class="nx-quad-empty">{isDrop ? 'Drop here' : 'No tasks'}</div>
         ) : (
-          tasks.map((t) => <TaskRow key={t.id} task={t} />)
+          tasks.map((t, i) => <TaskRow key={t.id} task={t} focused={i === focusIdx} />)
         )}
-        {folder.length > 0 && <FolderRow priority={priority} tasks={folder} />}
+        {folder.length > 0 && <FolderRow priority={priority} tasks={folder} focused={focusIdx === tasks.length} />}
       </div>
     </section>
   );
 }
 
-function TaskRow({ task }: { task: Task }) {
+/** Scrolls a row into view when the keyboard highlight lands on it. */
+function useFocusScroll(focused: boolean | undefined) {
+  const ref = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    if (focused) ref.current?.scrollIntoView({ block: 'nearest' });
+  }, [focused]);
+  return ref;
+}
+
+function TaskRow({ task, focused }: { task: Task; focused?: boolean }) {
   const meta = PRIORITY_META[task.priority];
   const done = task.isCompleted || task.isWontDo;
   const bar = task.isWontDo ? 'var(--nx-textTer)' : task.isPinned && !done ? 'var(--nx-accent)' : meta.color;
   const handlers = useTaskDrag(task);
+  const ref = useFocusScroll(focused);
   return (
     <div
-      class={`nx-task ${done ? 'done' : ''} ${draggingId.value === task.id ? 'ghosted' : ''}`}
+      ref={ref as { current: HTMLDivElement | null }}
+      class={`nx-task ${done ? 'done' : ''} ${draggingId.value === task.id ? 'ghosted' : ''} ${focused ? 'focused' : ''}`}
       data-flip={String(task.id)}
       data-task={task.id}
       style={{ '--bar': bar } as JSX.CSSProperties}
@@ -117,15 +132,16 @@ function TaskRow({ task }: { task: Task }) {
  * Imported tasks that aren't due today wait here, one row per quadrant, so a 300-row sheet
  * doesn't bury what you typed. Tap to open the folder. Identical on Android.
  */
-export function FolderRow({ priority, tasks }: { priority: Priority; tasks: Task[] }) {
+export function FolderRow({ priority, tasks, focused }: { priority: Priority; tasks: Task[]; focused?: boolean }) {
   const s = folderSummary(tasks, today.value);
+  const ref = useFocusScroll(focused);
   const open = () => {
     if (!tour.allows('EXPAND', priority)) return;
     haptic('FAB_TAP');
     nav.open({ kind: 'full', priority, folder: true });
   };
   return (
-    <button class="nx-folder-row" onClick={(e) => { e.stopPropagation(); open(); }} aria-label={`Imported: ${s.text}`}>
+    <button ref={ref as { current: HTMLButtonElement | null }} class={`nx-folder-row ${focused ? 'focused' : ''}`} onClick={(e) => { e.stopPropagation(); open(); }} aria-label={`Imported: ${s.text}`}>
       <Icon name="folder" size={16} class="ic" />
       <span class="title">Imported</span>
       <span class="sub">{s.text}</span>

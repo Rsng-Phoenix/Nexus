@@ -28,6 +28,7 @@ export type Layer =
   | { kind: 'pair'; link?: PairLink }
   | { kind: 'icsImport'; fileName: string; text: string }
   | { kind: 'sheetImport'; file?: File }
+  | { kind: 'palette' }
   | { kind: 'mini' };
 
 export type LayerEntry = Layer & { id: number };
