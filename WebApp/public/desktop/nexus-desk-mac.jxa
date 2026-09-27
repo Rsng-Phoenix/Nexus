@@ -107,6 +107,8 @@ const QUICK_H_DEFAULT = 440;
 const QUICK_H_MIN = 260;
 const QUICK_H_MAX = 720;
 const QUICK_TOP_RATIO = 0.22;
+const WIDGET_FADE_IN_S = 0.18;
+const WIDGET_FADE_OUT_S = 0.12;
 const QUICK_LEVEL = 101; // pop-up menu level: above full-screen apps and the widget
 const QUICK_CORNER_RADIUS = 18;
 const QUICK_MATERIAL = 13; // NSVisualEffectMaterialHUDWindow
@@ -163,6 +165,17 @@ function activateApp() {
   } catch (e) {
     $.NSApp.activateIgnoringOtherApps(true);
   }
+}
+
+/** Runs fn on the next turn of the main run loop, outside whatever callback we are in (e.g. WebKit's). */
+function later(fn) {
+  $.NSTimer.scheduledTimerWithTimeIntervalRepeatsBlock(0.01, false, () => {
+    try {
+      fn();
+    } catch (e) {
+      logLine('later: ' + e);
+    }
+  });
 }
 
 /** A dialog window the user must answer: above every Desk window, even if activation is refused. */
@@ -235,6 +248,8 @@ function logLine(text) {
 }
 
 let panel = null;
+let widgetHiddenForFull = false;
+let widgetFadeToken = 0;
 let web = null;
 let statusItem = null;
 let controller = null;
@@ -424,15 +439,30 @@ function isShown() {
 }
 
 function show() {
+  widgetFadeToken++; // cancels a fade-out still running
+  const wasHidden = !panel.isVisible || Number(panel.alphaValue) < 0.05;
   activateApp();
   if (calPanel) calPanel.orderFrontRegardless;
+  if (wasHidden) panel.alphaValue = 0;
   panel.makeKeyAndOrderFront(null);
   panel.orderFrontRegardless;
+  // Typing lands in the page straight away (Enter, N, arrows) without a click first.
+  panel.makeFirstResponder(web);
+  const target = pref('opacity', 1);
+  // Also catches a fade-out caught halfway: the new animation replaces it.
+  if (wasHidden || Number(panel.alphaValue) < target - 0.01) fadeTo(panel, target, WIDGET_FADE_IN_S, () => {});
+  if (wasHidden) evalIn(web, 'window.__nexusShown&&window.__nexusShown()');
 }
 
 function hide() {
-  panel.orderOut(null);
   if (calPanel) calPanel.orderOut(null);
+  if (!panel.isVisible) return;
+  const token = ++widgetFadeToken;
+  fadeTo(panel, 0, WIDGET_FADE_OUT_S, () => {
+    if (token !== widgetFadeToken) return; // shown again mid-fade: stay up
+    panel.orderOut(null);
+    panel.alphaValue = pref('opacity', 1);
+  });
 }
 
 function toggle() {
@@ -689,7 +719,10 @@ function openRecorder() {
     if (!recorderWin || !e.window.isEqual(recorderWin)) return e;
     const code = Number(e.keyCode);
     const mods = carbonMods(Number(e.modifierFlags));
-    if (code === 53 && !mods) return e; // Esc: the panel's Cancel (keyEquivalent) handles it
+    if (code === 53 && !mods) {
+      recorderClose();
+      return $();
+    }
     if (code === 36 && !mods) {
       recorderSave();
       return $();
@@ -701,17 +734,14 @@ function openRecorder() {
   activateApp();
   recorderWin.center;
   frontModal(recorderWin);
-  $.NSApp.runModalForWindow(recorderWin);
-  // Back from the modal loop.
+}
+
+function recorderClose() {
   if (recorderMonitor) {
     $.NSEvent.removeMonitor(recorderMonitor);
     recorderMonitor = null;
   }
-  recorderWin.orderOut(null);
-}
-
-function recorderClose() {
-  if (!TEST) $.NSApp.stopModal;
+  if (recorderWin && !TEST) recorderWin.orderOut(null);
 }
 
 /** Save: the new combination replaces the old one, unless another app already owns it. */
@@ -763,6 +793,7 @@ function makeFullWindow(link) {
   w.level = 0;
   w.minSize = $.NSMakeSize(640, 480);
   w.collectionBehavior = 128; // full-screen primary: the green button works
+  w.animationBehavior = 3; // NSWindowAnimationBehaviorDocumentWindow: zooms open like any Mac window
   if (TEST) w.setFrameOrigin($.NSMakePoint(TEST_ORIGIN, TEST_ORIGIN));
   else {
     if (!w.setFrameUsingName('NexusDeskFull')) w.center;
@@ -794,6 +825,11 @@ function openFullWindow(link) {
   fullHiddenAt = 0;
   if (TEST) return; // created hidden; the test never orders it front
   applyActivationPolicyFor(true);
+  // The full app replaces the floating widget while it is open; closing it brings the widget back.
+  if (!TEST && isShown()) {
+    widgetHiddenForFull = true;
+    hide();
+  }
   fullWin.makeKeyAndOrderFront(null); // visible before the activation notice, so becameActive: leaves the widget alone
   activateApp();
 }
@@ -1433,7 +1469,7 @@ function handleDesk(m, view) {
   }
   if (m.set && typeof m.set === 'object') return applyDeskSetting(String(m.set.key), m.set.value) ? 'set:' + m.set.key : 'set:refused';
   if (m.hotkey === 'change') {
-    openRecorder();
+    later(() => openRecorder());
     return 'hotkey:change';
   }
   if (m.categories && typeof m.categories === 'object') {
@@ -1549,6 +1585,10 @@ function pageFailed(wv, error) {
 function fullWillClose() {
   fullHiddenAt = Date.now();
   if (!TEST) applyActivationPolicyFor(false);
+  if (widgetHiddenForFull) {
+    widgetHiddenForFull = false;
+    if (!TEST) show();
+  }
 }
 
 ObjC.registerSubclass({
