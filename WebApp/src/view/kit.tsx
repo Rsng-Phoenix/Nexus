@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { haptic } from '../lib/haptics';
 import { isWide } from '../state/viewport';
 import { Icon, type IconName } from './icons';
-import { animate, BOUNCY, ENTER, EXIT, STANDARD, useEnterExit } from './motion';
+import { EXIT, play, SPRING_ENTER, SPRING_MOVE, SPRING_SNAPPY, STANDARD, useEnterExit } from './motion';
 
 // ─── Layers ────────────────────────────────────────────────────────────────────
 
@@ -33,7 +33,7 @@ export function Sheet({
 }) {
   const panel = useRef<HTMLDivElement>(null);
   const shade = useRef<HTMLDivElement>(null);
-  // Phone: slides up from the bottom edge. Desktop: fades and zooms in, centred.
+  // Phone: springs up from the bottom edge. Desktop: springs in from a slight zoom, centred.
   const wide = isWide.value;
   useEnterExit(
     panel,
@@ -45,11 +45,11 @@ export function Sheet({
     wide
       ? [{ transform: 'none', opacity: 1 }, { transform: 'scale(0.97)', opacity: 0 }]
       : [{ transform: getComputedTransform(panel.current) }, { transform: 'translateY(100%)' }],
-    wide ? { duration: 240, easing: 'cubic-bezier(0.2, 0, 0, 1)' } : undefined,
-    wide ? { duration: 170, easing: 'cubic-bezier(0.4, 0, 1, 1)' } : undefined
+    SPRING_ENTER,
+    EXIT
   );
   useEnterExit(shade, leaving, () => {}, [{ opacity: 0 }, { opacity: 1 }], [{ opacity: 1 }, { opacity: 0 }],
-    { duration: 200, easing: 'linear' }, { duration: 200, easing: 'linear' });
+    { duration: 200, easing: 'linear' }, { duration: EXIT.duration, easing: 'linear' });
   const drag = useSheetDrag(panel, onDismiss, 120);
   return (
     <div class="nx-layer" data-leaving={leaving || undefined}>
@@ -104,7 +104,7 @@ export function useSheetDrag(panel: { current: HTMLElement | null }, onDismiss: 
       } else {
         const from = el.style.transform;
         el.style.transform = '';
-        animate(el, [{ transform: from }, { transform: 'translateY(0)' }], { duration: 320, easing: BOUNCY, fill: 'none' });
+        play(el, [{ transform: from }, { transform: 'translateY(0)' }], { ...SPRING_MOVE, fill: 'none' }, 'presence');
       }
     },
     onPointerCancel: () => {
@@ -123,7 +123,7 @@ export function Page({ leaving, onExited, children, class: cls = '' }: LayerProp
     onExited,
     [{ transform: 'translateX(100%)' }, { transform: 'translateX(0)' }],
     [{ transform: 'translateX(0)' }, { transform: 'translateX(100%)' }],
-    ENTER,
+    SPRING_ENTER,
     { duration: 240, easing: STANDARD }
   );
   return (
@@ -177,9 +177,9 @@ export function Dialog({ open, onClose, title, children, actions, wide }: {
   const box = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     if (open && box.current)
-      animate(box.current, [{ opacity: 0, transform: 'scale(0.92)' }, { opacity: 1, transform: 'scale(1)' }], { duration: 260, easing: BOUNCY });
+      play(box.current, [{ opacity: 0, transform: 'scale(0.92)' }, { opacity: 1, transform: 'scale(1)' }], SPRING_ENTER, 'presence');
     if (leaving && box.current)
-      animate(box.current, [{ opacity: 1, transform: 'scale(1)' }, { opacity: 0, transform: 'scale(0.96)' }], { duration: 160, easing: STANDARD });
+      play(box.current, [{ opacity: 1, transform: 'scale(1)' }, { opacity: 0, transform: 'scale(0.96)' }], EXIT, 'presence');
   }, [open, leaving]);
   useEffect(() => {
     if (!open) return;
@@ -237,7 +237,7 @@ export function Menu({ trigger, items, align = 'end' }: {
     const r = wrap.current.getBoundingClientRect();
     const need = pop.current.offsetHeight + 12;
     setUp(r.bottom + need > window.innerHeight && r.top > need);
-    animate(pop.current, [{ opacity: 0, transform: 'scale(0.94)' }, { opacity: 1, transform: 'scale(1)' }], { duration: 160, easing: STANDARD });
+    play(pop.current, [{ opacity: 0, transform: 'scale(0.94)' }, { opacity: 1, transform: 'scale(1)' }], SPRING_SNAPPY, 'presence');
   }, [open]);
   useEffect(() => {
     if (!open) return;
@@ -481,10 +481,10 @@ export function CountBadge({ count, color, bg }: { count: number; color: string;
   useLayoutEffect(() => {
     if (prev.current !== count && ref.current) {
       const up = count > prev.current;
-      animate(ref.current, [
+      play(ref.current, [
         { transform: `translateY(${up ? 8 : -8}px)`, opacity: 0 },
         { transform: 'translateY(0)', opacity: 1 }
-      ], { duration: 220, easing: STANDARD });
+      ], SPRING_SNAPPY, 'roll');
     }
     prev.current = count;
   }, [count]);
@@ -503,6 +503,14 @@ export function Checkbox({ checked, color, size = 28, onChange, dim }: {
   onChange: (v: boolean) => void;
   dim?: boolean;
 }) {
+  const box = useRef<HTMLSpanElement>(null);
+  const was = useRef(checked);
+  // Tick: the box pops on the snappy spring while the stroke draws itself (nexus.css).
+  useLayoutEffect(() => {
+    if (checked && !was.current)
+      play(box.current, [{ transform: 'scale(0.82)' }, { transform: 'scale(1.1)', offset: 0.5 }, { transform: 'none' }], { ...SPRING_SNAPPY, fill: 'none' }, 'pop');
+    was.current = checked;
+  }, [checked]);
   return (
     <button
       role="checkbox"
@@ -515,9 +523,9 @@ export function Checkbox({ checked, color, size = 28, onChange, dim }: {
         onChange(!checked);
       }}
     >
-      <span class="box">
+      <span ref={box} class="box">
         <svg viewBox="0 0 24 24" width="70%" height="70%">
-          <path d="M5 12.5l4.2 4.2L19 7" fill="none" stroke="var(--nx-bg)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+          <path d="M5 12.5l4.2 4.2L19 7" pathLength="24" fill="none" stroke="var(--nx-bg)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
       </span>
     </button>

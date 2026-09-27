@@ -1,4 +1,21 @@
-export type BlockType = 'TEXT' | 'CHECKBOX' | 'BULLET' | 'NUMBERED';
+import { detectPrefix } from './autolist';
+
+export type BlockType = 'TEXT' | 'CHECKBOX' | 'BULLET' | 'NUMBERED' | 'IMAGE';
+
+const BLOCK_TYPES: readonly BlockType[] = ['TEXT', 'CHECKBOX', 'BULLET', 'NUMBERED', 'IMAGE'];
+
+/** `text` of an IMAGE block: `img:<id>` (id = first 16 hex chars of the sha-256 of the encoded bytes). */
+export const IMAGE_TEXT_PREFIX = 'img:';
+
+export function imageIdOf(block: Pick<NoteBlock, 'type' | 'text'>): string | null {
+  if (block.type !== 'IMAGE' || !block.text.startsWith(IMAGE_TEXT_PREFIX)) return null;
+  const id = block.text.slice(IMAGE_TEXT_PREFIX.length).trim();
+  return id ? id : null;
+}
+
+export function imageBlock(id: string): NoteBlock {
+  return block('IMAGE', `${IMAGE_TEXT_PREFIX}${id}`);
+}
 
 export interface NoteSpan {
   start: number;
@@ -36,14 +53,11 @@ export function fromStorage(raw: string): NoteBlock[] {
   }
 }
 
-function parseLegacyLine(line: string): NoteBlock {
-  if (line.startsWith('- [x] '))
-    return block('CHECKBOX', line.slice(6), true);
-  if (line.startsWith('- [ ] ')) return block('CHECKBOX', line.slice(6));
-  if (line.startsWith('- ')) return block('BULLET', line.slice(2));
-  if (/^\d+\.\s/.test(line))
-    return block('NUMBERED', line.replace(/^\d+\.\s/, ''));
-  return block('TEXT', line);
+/** One plain-text line → block: `- [x] `, `[ ] `, `- `, `* `, `• `, `1. `, `1) `… (see autolist). */
+export function parseLegacyLine(line: string): NoteBlock {
+  const p = detectPrefix(line);
+  if (!p) return block('TEXT', line);
+  return block(p.type, p.rest, p.checked ?? false);
 }
 
 function parseBlock(o: Record<string, unknown>): NoteBlock {
@@ -59,7 +73,7 @@ function parseBlock(o: Record<string, unknown>): NoteBlock {
   }));
   return {
     id: String(o.id ?? crypto.randomUUID()),
-    type: (o.type as BlockType) || 'TEXT',
+    type: BLOCK_TYPES.includes(o.type as BlockType) ? (o.type as BlockType) : 'TEXT',
     text: String(o.text ?? ''),
     checked: Boolean(o.checked),
     indent: Number(o.indent ?? 0),
@@ -69,6 +83,10 @@ function parseBlock(o: Record<string, unknown>): NoteBlock {
     spans,
     sortKey: Number(o.sortKey ?? -1)
   };
+}
+
+export function makeBlock(type: BlockType, text = '', checked = false): NoteBlock {
+  return block(type, text, checked);
 }
 
 function block(
@@ -195,6 +213,8 @@ export function toPlainText(blocks: NoteBlock[]): string {
           return `${pad}• ${b.text}`;
         case 'NUMBERED':
           return `${pad}${numberedIndexInRun(blocks, i)}. ${b.text}`;
+        case 'IMAGE':
+          return `${pad}[image]`;
         default:
           return `${pad}${b.text}`;
       }

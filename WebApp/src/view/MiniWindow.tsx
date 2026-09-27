@@ -2,24 +2,29 @@ import '../styles/mini.css';
 import { signal } from '@preact/signals';
 import type { JSX } from 'preact';
 import { render } from 'preact';
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { addDaysIso, dateToIso, isoToDate, todayIso } from '../calendar/deadline';
 import { buildCalendar, monthGrid } from '../calendar/items';
 import { clashesByDay } from '../calendar/clashes';
 import { clashes } from '../calendar/radar';
-import { fromStorage, toStorage } from '../notes/codec';
+import { fromStorage, imageIdOf, toStorage } from '../notes/codec';
+import { renderImageBlock } from '../ui/notes';
 import { nexusLogoHtml } from '../ui/nexus-logo';
 import { calendarSourceLabel, linkedState } from '../calendar/linked';
 import { haptic } from '../lib/haptics';
+import { pickerKey } from '../lib/pickerKeys';
 import { settingsSig, subscribeSettings } from '../settings/store';
+import { inNexusDesk, openFullInDesk } from '../state/desk';
 import { showSnack } from '../state/toasts';
 import { runSync, signInMessage } from '../sync/manager';
 import * as nav from '../state/nav';
-import { activeTasks, addTask, allTasks, byPriority, moveToPriority, setChecked, togglePin, updateTask } from '../state/store';
+import { activeTasks, allTasks, byPriority, moveToPriority, setChecked, togglePin, updateTask } from '../state/store';
 import type { Priority, Task } from '../types';
 import { PRIORITIES, PRIORITY_META } from '../types';
 import { Icon, type IconName } from './icons';
 import { DueBadge } from './Matrix';
+import { flip, measure } from './motion';
+import { addSmartTasks } from './QuickAddWindow';
 
 /**
  * Mini window: a small, always-on-top Nexus that floats over every other app (Document
@@ -106,6 +111,8 @@ export function fullAppUrl(task?: Task): string {
 /** Bring the full app forward on [task] (browsers allow focusing the opener from the mini window). */
 function openInFull(task?: Task, widget?: boolean) {
   if (widget) {
+    // Nexus Desk owns a full window of its own; elsewhere the browser opens the app.
+    if (inNexusDesk() && openFullInDesk({ task: task?.taskUuid })) return;
     window.open(fullAppUrl(task), '_blank', 'noopener');
     return;
   }
@@ -144,34 +151,6 @@ export function MiniApp({ win, widget = false, only }: { win: Window; widget?: b
   });
   const [signingIn, setSigningIn] = useState(false);
   const email = settingsSig.value.googleEmail;
-  const [prio, setPrio] = useState<Priority>('HIGH');
-  const [text, setText] = useState('');
-  const input = useRef<HTMLInputElement>(null);
-  // Nexus Desk's shortcut from any app (⌃⌥N on Mac) lands here, ready to type.
-  useEffect(() => {
-    // Only when this is the whole page (Nexus Desk / widget), never the mini window beside the matrix.
-    if (!widget) return;
-    const w = window as Window & { __nexusQuickAdd?: () => void };
-    w.__nexusQuickAdd = () => {
-      input.current?.focus();
-      input.current?.select();
-    };
-    // N (or Enter) anywhere in the window starts a task, like on the full matrix. Nexus Desk for
-    // Windows sends an "n" after Ctrl+Alt+N.
-    const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
-      const t = e.target;
-      if (t instanceof Element && t.closest('input, textarea, select, button, a, [contenteditable="true"], [role="dialog"]')) return;
-      if (e.key !== 'n' && e.key !== 'N' && e.key !== 'Enter') return;
-      e.preventDefault();
-      w.__nexusQuickAdd?.();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => {
-      delete w.__nexusQuickAdd;
-      window.removeEventListener('keydown', onKey);
-    };
-  }, []);
 
   const choose = (t: Tab) => {
     if (t === tab) return;
@@ -184,14 +163,6 @@ export function MiniApp({ win, widget = false, only }: { win: Window; widget?: b
       /* ignore */
     }
   };
-  const add = () => {
-    const v = text.trim();
-    if (!v) return;
-    setText('');
-    haptic('FAB_TAP');
-    void addTask(v, prio);
-  };
-
   const open = activeTasks.value.filter((t) => !t.isCompleted && !t.isWontDo && !t.taskUuid.startsWith('nexus-tutorial-'));
   return (
     <div class="nx-mini">
@@ -245,49 +216,7 @@ export function MiniApp({ win, widget = false, only }: { win: Window; widget?: b
           </button>
         </div>
       )}
-      {tab !== 'calendar' && (
-        <form
-          class="nx-mini-add"
-          style={{ '--c': PRIORITY_META[prio].color } as JSX.CSSProperties}
-          onSubmit={(e) => {
-            e.preventDefault();
-            add();
-          }}
-        >
-          <Icon name="add" size={16} class="plus" />
-          <input
-            ref={input}
-            value={text}
-            placeholder={`Add to ${PRIORITY_META[prio].label}…`}
-            aria-label="New task"
-            onInput={(e) => setText(e.currentTarget.value)}
-            onKeyDown={(e) => {
-              // Alt+1…4 picks the priority without leaving the field.
-              if (e.altKey && /^[1-4]$/.test(e.key)) {
-                e.preventDefault();
-                setPrio(PRIORITIES[Number(e.key) - 1]);
-              }
-            }}
-          />
-          <span class="prios" role="radiogroup" aria-label="Priority">
-            {PRIORITIES.map((p, i) => (
-              <button
-                key={p}
-                type="button"
-                role="radio"
-                aria-checked={prio === p}
-                title={`${PRIORITY_META[p].label} (Alt+${i + 1})`}
-                class={prio === p ? 'on' : ''}
-                style={{ '--c': PRIORITY_META[p].color } as JSX.CSSProperties}
-                onClick={() => {
-                  setPrio(p);
-                  input.current?.focus();
-                }}
-              />
-            ))}
-          </span>
-        </form>
-      )}
+      {tab !== 'calendar' && <Composer widget={widget} />}
       <div class="nx-mini-scroll" key={tab}>
         {tab === 'matrix' ? <MiniMatrix widget={widget} /> : tab === 'today' ? <MiniToday widget={widget} /> : <MiniCalendar widget={widget} />}
       </div>
@@ -295,10 +224,213 @@ export function MiniApp({ win, widget = false, only }: { win: Window; widget?: b
   );
 }
 
+/** Priority the composer highlights first: the last one used in this window (High on first use). */
+let lastPicked: Priority = 'HIGH';
+/** The FLIP glide (motion ENTER, 340 ms) and the peek's opening are over by then. */
+const SETTLE_MS = 380;
+
+/**
+ * The add flow of the full matrix, inline: an idle pill (⏎ / N start it), a 2×2 priority picker
+ * (arrows, 1–4, Tab; ⏎ confirms; typing confirms and keeps the keystroke), then a field tinted
+ * with the priority (⏎ adds, reads dates/times/"!1" like everywhere else, esc goes back).
+ */
+function Composer({ widget }: { widget: boolean }) {
+  const [mode, setMode] = useState<'idle' | 'pick' | 'type'>('idle');
+  const [sel, setSelState] = useState<Priority>(lastPicked);
+  // Keys can arrive faster than re-renders: always act on the latest highlight / mode.
+  const selRef = useRef<Priority>(lastPicked);
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  const setSel = (p: Priority) => {
+    selRef.current = p;
+    setSelState(p);
+  };
+  const [text, setText] = useState('');
+  const input = useRef<HTMLInputElement>(null);
+
+  const start = () => {
+    if (modeRef.current !== 'idle') {
+      input.current?.focus();
+      return;
+    }
+    haptic('DRAG_TICK');
+    setSel(lastPicked);
+    setMode('pick');
+  };
+  const pick = (p: Priority, first = '') => {
+    lastPicked = p;
+    setSel(p);
+    setText(first);
+    haptic('FAB_TAP');
+    setMode('type');
+  };
+  const back = () => {
+    setText('');
+    setMode('idle');
+  };
+  const add = () => {
+    const v = text.trim();
+    if (!v) return back();
+    setText('');
+    haptic('FAB_TAP');
+    void addSmartTasks([v], selRef.current);
+  };
+  useLayoutEffect(() => {
+    if (mode !== 'type') return;
+    const el = input.current;
+    el?.focus();
+    el?.setSelectionRange(el.value.length, el.value.length);
+  }, [mode]);
+
+  useEffect(() => {
+    const w = window as Window & { __nexusQuickAdd?: () => void; __nexusQuickAddFallback?: (text: string) => void };
+    // Nexus Desk's shortcut from any app (⌃⌥N on Mac) lands here, on the picker. Only when this is
+    // the whole page (Desk / widget), never the mini window beside the matrix.
+    if (widget) {
+      w.__nexusQuickAdd = start;
+      // Text sent from outside (Services "Add to Nexus", nexus://add) when the panel isn't in use:
+      // first line is the title, the rest the notes.
+      w.__nexusQuickAddFallback = (raw) => {
+        const lines = String(raw ?? '').replace(/\r\n?/g, '\n').split('\n').map((l) => l.trim());
+        const title = lines.shift() ?? '';
+        if (title) void addSmartTasks([title], lastPicked, lines.filter(Boolean).join('\n'));
+      };
+    }
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target;
+      const inField = t instanceof Element && !!t.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]');
+      if (modeRef.current === 'pick') {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          return back();
+        }
+        const a = pickerKey(e, selRef.current);
+        if (!a) return;
+        e.preventDefault();
+        if (a.type === 'choose') pick(a.priority, a.text);
+        else if (a.priority !== selRef.current) {
+          haptic('DRAG_TICK');
+          setSel(a.priority);
+        }
+        return;
+      }
+      if (!widget || modeRef.current !== 'idle') return;
+      // N (or Enter) anywhere in the window starts a task, like on the full matrix. Nexus Desk for
+      // Windows sends an "n" after Ctrl+Alt+N.
+      if (e.metaKey || e.ctrlKey || e.altKey || e.repeat || inField) return;
+      if (t instanceof Element && t.closest('button, a')) return;
+      if (e.key !== 'n' && e.key !== 'N' && e.key !== 'Enter') return;
+      e.preventDefault();
+      start();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      if (widget) {
+        delete w.__nexusQuickAdd;
+        delete w.__nexusQuickAddFallback;
+      }
+      window.removeEventListener('keydown', onKey);
+    };
+  }, []);
+
+  if (mode === 'idle')
+    return (
+      <button class="nx-mini-composer idle" onClick={start} aria-label="New task">
+        <Icon name="add" size={15} class="plus" />
+        <span class="lbl">New task</span>
+        <kbd>⏎</kbd>
+      </button>
+    );
+  if (mode === 'pick')
+    return (
+      <div class="nx-mini-composer pick" role="listbox" aria-label="Choose a priority for the new task" aria-activedescendant={`mini-pick-${sel}`}>
+        {PRIORITIES.map((p, i) => {
+          const m = PRIORITY_META[p];
+          const open = byPriority.value[p].filter((t) => !t.isCompleted && !t.isWontDo).length;
+          return (
+            <button
+              key={p}
+              id={`mini-pick-${p}`}
+              role="option"
+              aria-selected={sel === p}
+              class={`cell ${sel === p ? 'on' : ''}`}
+              style={{ '--c': m.color } as JSX.CSSProperties}
+              onMouseEnter={() => setSel(p)}
+              onClick={() => pick(p)}
+            >
+              <span class="glyph">{m.glyph}</span>
+              <span class="label">{m.label}</span>
+              <span class="meta">{open === 0 ? 'Empty' : `${open} open`}</span>
+              <kbd>{i + 1}</kbd>
+            </button>
+          );
+        })}
+        <div class="foot">
+          <span><kbd>↑↓←→</kbd> move</span>
+          <span><kbd>⏎</kbd> choose · or just type</span>
+          <span><kbd>esc</kbd> back</span>
+        </div>
+      </div>
+    );
+  return (
+    <form
+      class="nx-mini-composer type"
+      style={{ '--c': PRIORITY_META[sel].color } as JSX.CSSProperties}
+      onSubmit={(e) => {
+        e.preventDefault();
+        add();
+      }}
+    >
+      <span class="tag" title={PRIORITY_META[sel].label}>{PRIORITY_META[sel].glyph}</span>
+      <input
+        ref={input}
+        value={text}
+        placeholder={`Add to ${PRIORITY_META[sel].label}…`}
+        aria-label={`New ${PRIORITY_META[sel].label.toLowerCase()} priority task`}
+        onInput={(e) => setText(e.currentTarget.value)}
+        onBlur={() => {
+          // Clicking elsewhere with nothing typed folds the composer back to its pill.
+          if (!input.current?.value.trim()) setTimeout(() => modeRef.current === 'type' && !input.current?.value.trim() && back(), 120);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            if (text) setText('');
+            else back();
+          } else if (e.altKey && /^[1-4]$/.test(e.key)) {
+            // Alt+1…4 switches the priority without leaving the field.
+            e.preventDefault();
+            haptic('DRAG_TICK');
+            lastPicked = PRIORITIES[Number(e.key) - 1];
+            setSel(lastPicked);
+          }
+        }}
+      />
+      <span class="hints">
+        <span><kbd>⏎</kbd> add</span>
+        <span><kbd>esc</kbd> back</span>
+      </span>
+    </form>
+  );
+}
+
+/** Rects of every row before this render, so `flip()` can glide moved rows to their new place. */
+function useFlip(): { ref: { current: HTMLDivElement | null } } {
+  const ref = useRef<HTMLDivElement>(null);
+  // Measured during render: the DOM still shows the previous layout at this point.
+  const prev = useRef<Map<string, DOMRect>>(new Map());
+  prev.current = measure(ref.current);
+  useLayoutEffect(() => {
+    flip(ref.current, prev.current);
+  });
+  return { ref };
+}
+
 function MiniMatrix({ widget }: { widget: boolean }) {
   const groups = byPriority.value;
+  const { ref } = useFlip();
   return (
-    <div class="nx-mini-quads">
+    <div class="nx-mini-quads" ref={ref}>
       {PRIORITIES.map((p, qi) => {
         const list = groups[p].filter((t) => !t.taskUuid.startsWith('nexus-tutorial-'));
         const openCount = list.filter((t) => !t.isCompleted && !t.isWontDo).length;
@@ -332,6 +464,7 @@ function MiniToday({ widget }: { widget: boolean }) {
     }
     return out;
   }, [allTasks.value, today]);
+  const { ref } = useFlip();
   if (!items.length)
     return (
       <div class="nx-mini-clear">
@@ -341,7 +474,7 @@ function MiniToday({ widget }: { widget: boolean }) {
       </div>
     );
   return (
-    <div class="nx-mini-list">
+    <div class="nx-mini-list" ref={ref}>
       {items.map((t) => (
         <MiniRow key={t.id} task={t} showPriority widget={widget} />
       ))}
@@ -365,6 +498,7 @@ function MiniCalendar({ widget }: { widget: boolean }) {
     return buildCalendar(allTasks.value, linked, days[0], days[days.length - 1]);
   }, [allTasks.value, linkedState.value, s.linkedCalendars, days]);
   const clashDays = useMemo(() => clashesByDay(clashes.value), [clashes.value]);
+  const { ref: listRef } = useFlip();
   const clashKeys = useMemo(() => {
     const m = new Map<string, string>();
     for (const c of clashes.value) {
@@ -444,7 +578,7 @@ function MiniCalendar({ widget }: { widget: boolean }) {
       {list.length === 0 ? (
         <p class="nothing">Nothing planned</p>
       ) : (
-        <div class="nx-mini-list" key={sel}>
+        <div class="nx-mini-list" key={sel} ref={listRef}>
           {list.map((i) =>
             i.type === 'event' ? (
               <div key={i.key} class={`nx-mini-row event ${i.time != null && clashKeys.has(`${i.event.uid}|${i.time}`) ? 'clashing' : ''}`} style={{ '--c': i.calendar.color } as JSX.CSSProperties}>
@@ -482,8 +616,30 @@ function MiniRow({ task, showPriority, widget = false }: { task: Task; showPrior
   const done = task.isCompleted || task.isWontDo;
   const expanded = openTask.value === task.id;
   const time = task.reminderTime != null && dateToIso(new Date(task.reminderTime)) === todayIso() && !task.reminderDateOnly ? fmtTime(task.reminderTime) : null;
+  const el = useRef<HTMLDivElement>(null);
+  // Follow the row: after a move to another priority the open row is re-parented, so the list
+  // scrolls to wherever it landed (next frame, once the FLIP glide has started).
+  useLayoutEffect(() => {
+    const row = el.current;
+    const scroller = row?.closest<HTMLElement>('.nx-mini-scroll');
+    if (!expanded || !row || !scroller) return;
+    // Measured now, before the list's FLIP puts a transform on the row: mid-glide the row still
+    // reads as sitting at its old spot, so scrollIntoView alone would decide nothing is needed.
+    const r = row.getBoundingClientRect();
+    const s = scroller.getBoundingClientRect();
+    const delta = r.top < s.top ? r.top - s.top : r.bottom > s.bottom ? Math.min(r.bottom - s.bottom, r.top - s.top) : 0;
+    // Timers, not frames: a hidden document (the Desk window ordered out) never paints a frame.
+    const behavior = document.visibilityState === 'visible' ? 'smooth' : 'auto';
+    const t1 = window.setTimeout(() => delta && scroller.scrollBy({ top: delta, behavior }), 0);
+    // Once the glide and the peek's opening have settled, a last nudge on the real geometry.
+    const t2 = window.setTimeout(() => row.scrollIntoView({ block: 'nearest', behavior }), SETTLE_MS);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [expanded, task.priority]);
   return (
-    <div class={`nx-mini-row ${done ? 'done' : ''} ${expanded ? 'open' : ''}`} style={{ '--c': meta.color } as JSX.CSSProperties}>
+    <div ref={el} data-flip={task.id} class={`nx-mini-row ${done ? 'done' : ''} ${expanded ? 'open' : ''}`} style={{ '--c': meta.color } as JSX.CSSProperties}>
       <div class="line">
         <button
           class={`cb ${task.isCompleted ? 'on' : ''}`}
@@ -559,6 +715,15 @@ function RenameField({ task }: { task: Task }) {
 }
 
 /** A task opened in place: tick checklist items, move it, set a deadline. */
+
+/** A pasted image in the peek: drawn by the notes editor's own renderer (cache, then Drive). */
+function PeekImage({ id }: { id: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (ref.current && id) renderImageBlock(ref.current, id);
+  }, [id]);
+  return <div ref={ref} class="img" />;
+}
 function TaskPeek({ task, widget }: { task: Task; widget: boolean }) {
   const blocks = useMemo(() => fromStorage(task.notes ?? ''), [task.notes]);
   const hasNotes = blocks.some((b) => b.text.trim());
@@ -581,6 +746,7 @@ function TaskPeek({ task, widget }: { task: Task; widget: boolean }) {
             if (!b.text.trim() && b.type !== 'CHECKBOX') return null;
             n = b.type === 'NUMBERED' ? n + 1 : 0;
             const pad = { paddingLeft: `${b.indent * 12}px` };
+            if (b.type === 'IMAGE') return <PeekImage key={b.id} id={imageIdOf(b) ?? ''} />;
             if (b.type === 'CHECKBOX')
               return (
                 <button key={b.id} class={`item ${b.checked ? 'on' : ''}`} style={pad} onClick={() => toggleItem(b.id)}>

@@ -25,13 +25,21 @@ export function ensureOAuthClientConsistency(
 }
 
 export const DRIVE_APPDATA_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
-export const SCOPE = `${DRIVE_APPDATA_SCOPE} openid email profile`;
+/**
+ * Non-sensitive (no Google verification): only the files the user picks in the Google Picker, so
+ * Nexus can read an org-restricted Google Sheet through the Sheets API (import/sheetsApi.ts).
+ * Never the user's whole Drive.
+ */
+export const DRIVE_FILE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+// Incremental consent everywhere (include_granted_scopes): a session from before drive.file keeps
+// working with its old grant; the Picker asks for the new scope once, when it is first needed.
+export const SCOPE = `${DRIVE_APPDATA_SCOPE} ${DRIVE_FILE_SCOPE} openid email profile`;
 
 let tokenClient: {
   requestAccessToken: (o?: { prompt?: string; hint?: string }) => void;
 } | null = null;
 // Token survives reloads for its lifetime (~1h) so opening the app doesn't need a popup.
-// Scope is only drive.appdata (Nexus's own hidden file), never the user's Drive.
+// Scope is drive.appdata (Nexus's own hidden file) plus drive.file (sheets you picked), never the user's Drive.
 const TOKEN_KEY = 'nexus_gtoken';
 let accessToken: string | null = null;
 let tokenExpires = 0;
@@ -61,6 +69,7 @@ declare global {
           initTokenClient: (cfg: {
             client_id: string;
             scope: string;
+            include_granted_scopes?: boolean;
             callback: (r: { access_token?: string; expires_in?: number; error?: string }) => void;
             error_callback?: (e: { type?: string }) => void;
           }) => { requestAccessToken: (o?: { prompt?: string; hint?: string }) => void };
@@ -108,6 +117,7 @@ function ensureTokenClient(): void {
   tokenClient = window.google!.accounts.oauth2.initTokenClient({
     client_id: GOOGLE_CLIENT_ID,
     scope: SCOPE,
+    include_granted_scopes: true,
     callback: (resp: TokenResponse) => {
       const resolve = pendingTokenResolve;
       pendingTokenResolve = null;
@@ -219,6 +229,22 @@ export async function hasDriveAppDataAccess(token: string): Promise<boolean> {
     return probe.ok || (probe.status !== 401 && probe.status !== 403);
   } catch {
     return true;
+  }
+}
+
+/**
+ * Whether [token] carries [scope] (Google's tokeninfo). Unlike hasDriveAppDataAccess this never
+ * probes an API and never guesses: offline or unsure → false, so the caller asks for consent again
+ * (harmless with incremental consent).
+ */
+export async function tokenHasScope(token: string, scope: string): Promise<boolean> {
+  try {
+    const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(token)}`);
+    if (!res.ok) return false;
+    const data = (await res.json()) as { scope?: string; error?: string };
+    return !data.error && (data.scope ?? '').split(/\s+/).includes(scope);
+  } catch {
+    return false;
   }
 }
 

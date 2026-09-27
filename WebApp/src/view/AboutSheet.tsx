@@ -193,10 +193,14 @@ function UpdateChecker() {
 
 /** Copied from MainActivity.kt ChangelogDialog (emoji stripped). */
 const ANDROID_CHANGES = [
+  'Notes understand lists: type "1." , "-" or "[ ]" and the line becomes a numbered, bulleted or checklist item; Backspace turns it back into text; pasted lists keep every line',
+  'Paste or add images in task notes; they sync to your other devices through Google Drive',
+  'Private and company Google Sheets can be linked too, and linked sheets now reach all your devices',
+  'Settings in clear sections, and smoother motion everywhere',
+  'One version everywhere: web, Nexus Desk and Android are all 5.0',
   'Smart add: type "call CA tomorrow 5pm !1" and Nexus sets the date, reminder and priority for you',
   "Reliable reminders: one tap in Settings so the phone's battery saver can't stop your reminders",
   'Imported tasks now wait in an Imported folder inside each quadrant; only the ones due today step onto the matrix. Their reminders still ring on time',
-  'One version everywhere: web, Nexus Desk and Android are all 4.0',
   'Share, redesigned: chat-ready text, a branded image card, and multi-page PDFs with selectable text in any language',
   'Link a Google Sheet: its rows become tasks and keep updating as the sheet changes',
   'Linked sheets: one title for every row (e.g. "Appointment"), dates like "24th Sep", and battery-friendly updates you control',
@@ -243,11 +247,21 @@ const ANDROID_CHANGES = [
 ];
 
 const WEB_CHANGES = [
+  'Nexus Desk is a full Mac app: Open full Nexus now opens inside Nexus Desk, same account and data',
+  'Quick Add from any app: a focused panel glides in, reads dates, times and !1–!4, and takes pasted lists and images',
+  'Change the add-a-task shortcut to any keys you like',
+  'Mac notifications with Done, Snooze, Open and Join buttons; "Add to Nexus" in the Services menu of any app',
+  'The Desk widget adds with the keyboard: ⏎, pick a priority, type, ⏎',
+  'An opened task in the widget stays in view when you move it to another priority',
+  'Notes understand lists: type "1." , "-" or "[ ]" and the line becomes a numbered, bulleted or checklist item; Backspace turns it back into text; pasted lists keep every line',
+  'Paste or add images in task notes; they sync to your other devices through Google Drive',
+  'Private and company Google Sheets can be linked too, and linked sheets now reach all your devices',
+  'Settings in clear sections, and smoother motion everywhere',
+  'One version everywhere: web, Nexus Desk and Android are all 5.0',
   'Nexus Desk for Mac shows reminders as real macOS notifications; ⌃⌥N (Ctrl+Alt+N on Windows) adds a task from any app',
   'Sync rides out Wi-Fi changes and waking from sleep instead of saying Google Drive is unreachable',
   'Keyboard first: ⌘K / Ctrl+K opens a command palette that finds any task or action; arrows or J K H L move a highlight round the matrix (Space done, P pin, ⌫ delete, ⌥1–4 move); smart add reads "call CA tomorrow 5pm !1" as the date, reminder and priority; ? lists every shortcut',
   'Imported tasks now wait in an Imported folder inside each quadrant; only the ones due today step onto the matrix. Their reminders still ring on time',
-  'One version everywhere: web, Nexus Desk and Android are all 4.0',
   'Share, redesigned: chat-ready text with dates and ☐ checklist, a branded image card, and proper multi-page PDFs in any language',
   'Link a Google Sheet: its rows become tasks and keep updating as the sheet changes (your ticks and edits stay)',
   'Linked sheets: one title for every row (e.g. "Appointment"), dates like "24th Sep", uploaded Excel files in Google Drive, and a "Only when I tap Update" choice to save battery',

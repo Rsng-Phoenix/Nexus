@@ -1,20 +1,26 @@
 import { signal } from '@preact/signals';
 import * as db from '../db/tasks';
-import { getSettings, patchSettings, type LinkedSheet, type SheetMapping } from '../settings/store';
+import { getSettings, isSignedIn, patchSettings, type LinkedSheet, type SheetMapping } from '../settings/store';
 import { alertAt, dateToIso } from '../calendar/deadline';
 import { parseDueAlerts } from '../calendar/due';
 import { addSnooze } from '../reminders/notify';
 import { deleteTasks, importTasks } from '../state/store';
+import { getAccessToken } from '../sync/auth';
 import type { Task } from '../types';
 import type { Cell } from './cell';
 import { csvRowsToCells, parseCsv } from './csv';
+import { markSheetRemoved, markSheetUpdated } from './linkedSheetsSync';
+import { pickerAvailable } from './picker';
 import { buildImportPlan, type ImportItem } from './plan';
+import { readRowsViaApi, SheetNeedsPickError } from './sheetsApi';
 
 /**
  * A Google Sheet that keeps its tasks up to date ("Link a Google Sheet"). Nexus reads the sheet's
  * CSV export straight from Google (the sheet must be shared "Anyone with the link can view";
  * nothing goes through a Nexus server), turns rows into tasks with the column choices made in the
- * import wizard, and re-reads it every few minutes:
+ * import wizard, and re-reads it every few minutes. A sheet whose export is refused (private to an
+ * organisation) is read through the Sheets API with the signed-in account instead, once the user
+ * has chosen it in Google Drive (sheetsApi.ts, picker.ts):
  *
  * - new rows → new tasks; rows that changed in the sheet → their task is updated;
  * - a task is never touched when its row didn't change, so edits and ticks made in Nexus stay;
@@ -47,33 +53,66 @@ export const sheetCsvUrl = (r: SheetRef) => `https://docs.google.com/spreadsheet
 export const sheetOpenUrl = (r: SheetRef) => `https://docs.google.com/spreadsheets/d/${r.sheetId}/edit${r.gid ? `#gid=${r.gid}` : ''}`;
 export const sheetFileName = (r: SheetRef) => `gsheet:${r.sheetId}`;
 
-export class SheetError extends Error {}
+export const SHEET_PRIVATE_MESSAGE = 'Nexus can’t read this sheet. In Google Sheets choose Share → General access → “Anyone with the link” (Viewer).';
+/** Shown (with the "Choose in Google Drive" button) when the signed-in account may not read the sheet yet. */
+export const SHEET_PICK_MESSAGE = 'This sheet is private to your organisation. Choose it once in Google Drive so Nexus can read it.';
 
-/** Reads the sheet's rows (first 5,000, as a file import). */
-export async function fetchSheetRows(r: SheetRef): Promise<Cell[][]> {
+export class SheetError extends Error {
+  /** The sheet's sharing (or the account's access) is the problem, not the network or the link. */
+  readonly privateSheet: boolean;
+  /** Choosing the sheet in the Google Picker would fix it (picker.ts). */
+  readonly needsPick: boolean;
+  constructor(message: string, o: { privateSheet?: boolean; needsPick?: boolean } = {}) {
+    super(message);
+    this.privateSheet = o.privateSheet ?? false;
+    this.needsPick = o.needsPick ?? false;
+  }
+}
+
+/** The sheet's public CSV export (no cookies, no account): the way every shared-with-the-link sheet is read. */
+export async function fetchPublicSheetRows(r: SheetRef): Promise<Cell[][]> {
   let res: Response;
   try {
     res = await fetch(sheetCsvUrl(r), { credentials: 'omit', cache: 'no-store' });
   } catch {
     // A private sheet sends the browser to Google's sign-in page, which the browser blocks: it looks
     // like a network error, so when online the likely cause is the sheet's sharing.
-    throw new SheetError(
-      typeof navigator !== 'undefined' && navigator.onLine === false
-        ? "You're offline. Nexus will read the sheet when you're back online."
-        : 'Nexus can’t read this sheet. In Google Sheets choose Share → General access → “Anyone with the link” (Viewer).'
-    );
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) throw new SheetError("You're offline. Nexus will read the sheet when you're back online.");
+    throw new SheetError(SHEET_PRIVATE_MESSAGE, { privateSheet: true });
   }
   if (res.status === 404) throw new SheetError('That sheet was not found. Was it deleted, or is the link incomplete?');
   if (res.status === 400) throw new SheetError('Google couldn’t export that tab. Open the tab you want in Google Sheets and copy the link again.');
   const type = res.headers.get('content-type') ?? '';
   // A private sheet answers with Google's sign-in page instead of the data.
   if (res.status === 401 || res.status === 403 || type.includes('text/html')) {
-    throw new SheetError('Nexus can’t read this sheet. In Google Sheets choose Share → General access → “Anyone with the link” (Viewer).');
+    throw new SheetError(SHEET_PRIVATE_MESSAGE, { privateSheet: true });
   }
   if (!res.ok) throw new SheetError(`Google Sheets answered ${res.status}. Try again in a minute.`);
   const text = await res.text();
   if (text.length > MAX_BYTES) throw new SheetError('This sheet is over 5 MB. Link a smaller tab.');
   return csvRowsToCells(parseCsv(text).rows);
+}
+
+/**
+ * Reads the sheet's rows (first 5,000, as a file import): the public export first; when that is
+ * refused and you're signed in, the Sheets API with your account (sheets you chose in Google Drive,
+ * or that are shared with you). Neither path costs anything when the sheet is public.
+ */
+export async function fetchSheetRows(r: SheetRef): Promise<Cell[][]> {
+  try {
+    return await fetchPublicSheetRows(r);
+  } catch (e) {
+    if (!(e instanceof SheetError) || !e.privateSheet || !isSignedIn()) throw e;
+    const token = await getAccessToken({ interactive: false });
+    if (!token) throw e;
+    try {
+      return await readRowsViaApi(token, r.sheetId, r.gid);
+    } catch (a) {
+      // Without the Picker configured the only way in is the sharing setting: say that instead.
+      if (a instanceof SheetNeedsPickError) throw new SheetError(pickerAvailable() ? SHEET_PICK_MESSAGE : SHEET_PRIVATE_MESSAGE, { privateSheet: true, needsPick: true });
+      throw new SheetError(a instanceof Error ? a.message : e.message, { privateSheet: true });
+    }
+  }
 }
 
 type Snapshot = { rows: Record<string, string>; at: number };
@@ -202,7 +241,13 @@ export async function linkSheet(ref: SheetRef, name: string, mapping: SheetMappi
   const result = await applySheet(link, rows);
   link.lastSyncAt = Date.now();
   patchSettings({ linkedSheets: [...getSettings().linkedSheets.filter((l) => l.id !== link.id), link] });
+  await markSheetUpdated(link); // so the link reaches your other devices (linkedSheetsSync.ts)
   return { link, result };
+}
+
+/** Forgets what a linked sheet's last read looked like (after the link itself is gone). */
+export async function dropSheetSnapshot(id: string): Promise<void> {
+  await db.deleteMeta(SNAP(id));
 }
 
 /** The sheet's tasks that are still ahead: open (not finished) and due today or later. */
@@ -221,8 +266,10 @@ export async function upcomingSheetTasks(id: string, today = dateToIso(new Date(
 export async function unlinkSheet(id: string, removeUpcoming = false): Promise<number[]> {
   const gone = removeUpcoming ? (await upcomingSheetTasks(id)).map((t) => t.id) : [];
   if (gone.length) await deleteTasks(gone);
+  const link = getSettings().linkedSheets.find((l) => l.id === id);
   patchSettings({ linkedSheets: getSettings().linkedSheets.filter((l) => l.id !== id) });
-  await db.deleteMeta(SNAP(id));
+  await dropSheetSnapshot(id);
+  if (link) await markSheetRemoved(link); // the removal reaches your other devices (linkedSheetsSync.ts)
   return gone;
 }
 

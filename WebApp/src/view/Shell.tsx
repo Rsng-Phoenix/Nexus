@@ -7,7 +7,7 @@ import { runUndo, showSnack, snack, syncPill, UNDO_MS, undoToast } from '../stat
 import { onSyncState } from '../sync/manager';
 import type { Priority } from '../types';
 import { Icon } from './icons';
-import { animate, BOUNCY } from './motion';
+import { play, SPRING_ENTER, SPRING_MOVE } from './motion';
 import { fabDragging, dropTarget, measureQuadrants, quadrantAt } from './Matrix';
 import { tour } from './tour-state';
 import { isPc, isWide } from '../state/viewport';
@@ -127,7 +127,7 @@ export function Fab({ onAdd }: { onAdd: (p: Priority) => void }) {
     if (!el) return;
     const from = el.style.transform;
     el.style.transform = '';
-    if (from) animate(el, [{ transform: from }, { transform: 'none' }], { duration: 380, easing: BOUNCY, fill: 'none' });
+    if (from) play(el, [{ transform: from }, { transform: 'none' }], { ...SPRING_MOVE, fill: 'none' }, 'home');
   };
 
   return (
@@ -214,8 +214,8 @@ function UndoPill({ message }: { message: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const bar = useRef<HTMLSpanElement>(null);
   useLayoutEffect(() => {
-    animate(ref.current, [{ opacity: 0, transform: 'translateY(16px)' }, { opacity: 1, transform: 'none' }], { duration: 300, easing: BOUNCY });
-    animate(bar.current, [{ transform: 'scaleX(1)' }, { transform: 'scaleX(0)' }], { duration: UNDO_MS, easing: 'linear' });
+    play(ref.current, [{ opacity: 0, transform: 'translateY(16px) scale(0.96)' }, { opacity: 1, transform: 'none' }], SPRING_ENTER, 'presence');
+    play(bar.current, [{ transform: 'scaleX(1)' }, { transform: 'scaleX(0)' }], { duration: UNDO_MS, easing: 'linear' }, 'countdown');
   }, []);
   return (
     <div ref={ref} class="nx-undo" style={{ position: 'relative' }}>
@@ -232,7 +232,7 @@ function UndoPill({ message }: { message: string }) {
 function SnackView({ message, action }: { message: string; action?: { label: string; run: () => void } }) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
-    animate(ref.current, [{ opacity: 0, transform: 'translateY(12px)' }, { opacity: 1, transform: 'none' }], { duration: 240, easing: BOUNCY });
+    play(ref.current, [{ opacity: 0, transform: 'translateY(12px) scale(0.97)' }, { opacity: 1, transform: 'none' }], SPRING_ENTER, 'presence');
   }, []);
   return (
     <div ref={ref} class="nx-snack">
@@ -278,7 +278,7 @@ export function usePullToSync(el: { current: HTMLElement | null }, onPull: () =>
       if (node.style.transform) {
         const from = node.style.transform;
         node.style.transform = '';
-        animate(node, [{ transform: from }, { transform: 'none' }], { duration: 320, easing: BOUNCY, fill: 'none' });
+        play(node, [{ transform: from }, { transform: 'none' }], { ...SPRING_MOVE, fill: 'none' }, 'pull');
       }
     };
     node.addEventListener('touchstart', down, { passive: true });

@@ -19,7 +19,7 @@ import { clashes } from '../calendar/radar';
 import { calendarFocusDay, RadarDish } from './ClashSheet';
 import { Icon } from './icons';
 import { Checkbox, IconButton, Menu, Page, PageHeader } from './kit';
-import { animate } from './motion';
+import { play, SPRING_MOVE } from './motion';
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -85,10 +85,8 @@ export function CalendarPage(p: LayerProps) {
 
   useLayoutEffect(() => {
     if (!dir.current) return;
-    animate(gridRef.current, [{ opacity: 0, transform: `translateX(${dir.current * 24}px)` }, { opacity: 1, transform: 'none' }], {
-      duration: 240,
-      easing: 'cubic-bezier(0.2,0,0,1)'
-    });
+    // Month swipe: the grid springs in from the side it came from; a quick second swipe restarts it.
+    play(gridRef.current, [{ opacity: 0, transform: `translateX(${dir.current * 24}px)` }, { opacity: 1, transform: 'none' }], SPRING_MOVE, 'month');
     dir.current = 0;
   }, [ym.y, ym.m]);
 

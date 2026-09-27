@@ -49,7 +49,10 @@
 
 /* ─── Sections + desktop two-pane layout ─────────────────────────────────────── */
 .nx-set-layout { flex: 1; min-height: 0; display: flex; }
+/* Split mode: the body crossfades + slides on a category switch (SettingsPage play(); transform/opacity only). */
 .nx-set-scroll { flex: 1; }
+/* Skeleton rows while a category's live data (linked sheets, calendars) is still loading. */
+.nx-settings .nx-skel { min-height: 56px; margin: 0 14px 8px; }
 .nx-set-nav { display: none; }
 .nx-set-sec { scroll-margin-top: 8px; }
 .nx-pause-row { display: flex; flex-wrap: wrap; gap: 6px; }

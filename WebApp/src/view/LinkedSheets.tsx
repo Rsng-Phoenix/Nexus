@@ -1,4 +1,6 @@
-import { refreshSheet, sheetBusy, sheetOpenUrl, unlinkSheet, upcomingSheetTasks } from '../import/liveSheet';
+import { useState } from 'preact/hooks';
+import { refreshSheet, SHEET_PICK_MESSAGE, sheetBusy, sheetOpenUrl, unlinkSheet, upcomingSheetTasks } from '../import/liveSheet';
+import { chooseSheetInDrive, pickerAvailable } from '../import/picker';
 import { patchSettings, settingsSig, SHEET_REFRESH_CHOICES, sheetRefreshLabel } from '../settings/store';
 import { askChoice } from '../state/prompts';
 import { restoreTasks } from '../state/store';
@@ -15,6 +17,7 @@ const ago = (at: number) => {
 /** Settings → Import: the Google Sheets that keep updating their tasks. */
 export function LinkedSheets() {
   const s = settingsSig.value;
+  const [picking, setPicking] = useState('');
   if (!s.linkedSheets.length) return null;
   const busy = sheetBusy.value;
 
@@ -23,6 +26,20 @@ export function LinkedSheets() {
     if (!r) return; // the error shows on the row
     const parts = [r.added && `${r.added} added`, r.updated && `${r.updated} updated`, r.removed && `${r.removed} removed`].filter(Boolean);
     showSnack(parts.length ? parts.join(' · ') : 'Already up to date');
+  };
+  // A sheet that turned private to its organisation (or arrived from another device before this
+  // account may read it): choose it in Google Drive once, then read it again.
+  const choose = async (id: string) => {
+    const l = s.linkedSheets.find((x) => x.id === id);
+    if (!l) return;
+    setPicking(id);
+    try {
+      if (await chooseSheetInDrive(l)) await update(id);
+    } catch (e) {
+      showSnack(e instanceof Error ? e.message : 'Choosing the sheet failed.', undefined, 5000);
+    } finally {
+      setPicking('');
+    }
   };
   const stop = async (id: string, name: string) => {
     const upcoming = (await upcomingSheetTasks(id)).length;
@@ -51,8 +68,13 @@ export function LinkedSheets() {
             <span class="ic"><Icon name="table" size={18} /></span>
             <span class="txt">
               <b>{l.name}</b>
-              <small class={l.lastError ? 'err' : ''}>{busy[l.id] ? 'Reading…' : l.lastError || ago(l.lastSyncAt)}</small>
+              <small class={l.lastError ? 'err' : ''}>{busy[l.id] ? 'Reading…' : picking === l.id ? 'Waiting for Google Drive…' : l.lastError || ago(l.lastSyncAt)}</small>
             </span>
+            {l.lastError === SHEET_PICK_MESSAGE && pickerAvailable() && (
+              <button class="press" title="Choose in Google Drive" aria-label={`Choose ${l.name} in Google Drive`} disabled={!!busy[l.id] || !!picking} onClick={() => void choose(l.id)}>
+                <Icon name="cloud" size={16} />
+              </button>
+            )}
             <button class="press" title="Update now" aria-label={`Update ${l.name} now`} disabled={!!busy[l.id]} onClick={() => void update(l.id)}>
               <Icon name="sync" size={16} />
             </button>

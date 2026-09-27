@@ -1,6 +1,7 @@
 import { signal } from '@preact/signals';
 import type { LayoutMode, Priority, ThemeMode } from '../types';
 import { applyPalette, darkPalette, lightPalette, resolveDark } from '../theme/palette';
+import { installMotionTokens } from '../view/motion';
 
 const KEY = 'nexus_settings';
 
@@ -73,11 +74,14 @@ export interface Settings {
   calendarFeed: FeedCreds | null;
   /** Which screen Nexus opens on: the matrix, or the calendar for people who plan by date. */
   startView: StartView;
+  /** Appearance → Motion: 'reduced' turns every spring into an ≤ 80 ms fade (html[data-motion]). */
+  motion: MotionMode;
   /** Settings schema version, for one-time migrations. */
   schema: number;
 }
 
 export type StartView = 'matrix' | 'calendar';
+export type MotionMode = 'full' | 'reduced';
 
 /** A live calendar feed. [shared]: this copy came from / was written to Drive (not stored there). */
 export type FeedCreds = { v: 1; id: string; key: string; createdAt: number; notes: boolean; shared?: boolean };
@@ -189,6 +193,7 @@ const defaults: Settings = {
   ignoredClashes: [],
   calendarFeed: null,
   startView: 'matrix',
+  motion: 'full',
   schema: 4
 };
 
@@ -221,6 +226,7 @@ function loadRaw(): Settings {
     s.calendarRefreshMinutes = nearestRefresh(Number(s.calendarRefreshMinutes) || DEFAULTS.calendarRefreshMinutes);
     if (!MEETING_LEAD_CHOICES.includes(s.meetingLeadMinutes as (typeof MEETING_LEAD_CHOICES)[number])) s.meetingLeadMinutes = 10;
     if (s.startView !== 'calendar') s.startView = 'matrix';
+    if (s.motion !== 'reduced') s.motion = 'full';
     if (!CLASH_MIN_CHOICES.includes(s.clashMinMinutes as (typeof CLASH_MIN_CHOICES)[number])) s.clashMinMinutes = 1;
     if (!Array.isArray(s.ignoredClashes)) s.ignoredClashes = [];
     if (!Array.isArray(s.linkedRemoved)) s.linkedRemoved = [];
@@ -258,6 +264,7 @@ export function resetSettings(): void {
     weekStart: 1,
     calendarRefreshMinutes: DEFAULTS.calendarRefreshMinutes,
     startView: 'matrix',
+    motion: 'full',
     notifyMeetings: false,
     meetingLeadMinutes: 10,
     clashRadar: true,
@@ -295,6 +302,12 @@ export function patchSettings(p: Partial<Settings>): void {
   applyTheme();
   applyFontScale();
   applyLayout();
+  applyMotion();
+}
+
+/** Mirrors the Motion setting as `html[data-motion]`, which the stylesheets and motion.ts read. */
+export function applyMotion(): void {
+  document.documentElement.dataset.motion = settings.motion === 'reduced' ? 'reduced' : 'full';
 }
 
 export function applyTheme(): void {
@@ -360,6 +373,8 @@ export function initSettings(): void {
   applyTheme();
   applyFontScale();
   applyLayout();
+  applyMotion();
+  installMotionTokens();
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
     if (settings.themeMode === 'SYSTEM') applyTheme();
   });

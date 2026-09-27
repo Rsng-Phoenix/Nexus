@@ -20,6 +20,12 @@ export const dropTarget = signal<Priority | null>(null);
 export const draggingId = signal<number | null>(null);
 
 const quadRects = new Map<Priority, DOMRect>();
+/**
+ * Where every row was after the last render, across all four quadrants, so a task that changes
+ * priority glides from its old quadrant to the new one (motion.ts flip() flies it across) instead
+ * of vanishing here and popping up there.
+ */
+const rowRects = new Map<string, DOMRect>();
 export function measureQuadrants(): void {
   document.querySelectorAll<HTMLElement>('[data-quad]').forEach((el) => {
     quadRects.set(el.dataset.quad as Priority, el.getBoundingClientRect());
@@ -49,13 +55,13 @@ function Quadrant({ priority }: { priority: Priority }) {
   const folder = importedByPriority.value[priority];
   const open = tasks.filter((t) => !t.isCompleted && !t.isWontDo).length;
   const list = useRef<HTMLDivElement>(null);
-  const before = useRef<Map<string, DOMRect>>(new Map());
-  const ids = tasks.map((t) => `${t.id}:${t.isCompleted || t.isWontDo}`).join(',');
-  // Compose animateItem(): rows glide to their new slot when order or membership changes.
-  before.current = before.current.size ? before.current : new Map();
+  const ids = tasks.map((t) => `${t.id}:${t.isCompleted || t.isWontDo}`).join(',') + (folder.length ? '|folder' : '');
+  // Compose animateItem(): rows glide to their new slot when order or membership changes. The
+  // quadrant that loses a task runs first (tree order) and leaves its old rect in the shared map,
+  // so the quadrant that gains it finds where it came from.
   useLayoutEffect(() => {
-    flip(list.current, before.current);
-    before.current = measure(list.current);
+    flip(list.current, rowRects);
+    for (const [k, r] of measure(list.current)) rowRects.set(k, r);
   }, [ids]);
   const isDrop = dropTarget.value === priority;
   // Keyboard highlight (view/keynav.ts): row index, the folder row counting as the last one.
@@ -141,7 +147,7 @@ export function FolderRow({ priority, tasks, focused }: { priority: Priority; ta
     nav.open({ kind: 'full', priority, folder: true });
   };
   return (
-    <button ref={ref as { current: HTMLButtonElement | null }} class={`nx-folder-row ${focused ? 'focused' : ''}`} onClick={(e) => { e.stopPropagation(); open(); }} aria-label={`Imported: ${s.text}`}>
+    <button ref={ref as { current: HTMLButtonElement | null }} class={`nx-folder-row ${focused ? 'focused' : ''}`} data-flip={`folder:${priority}`} onClick={(e) => { e.stopPropagation(); open(); }} aria-label={`Imported: ${s.text}`}>
       <Icon name="folder" size={16} class="ic" />
       <span class="title">Imported</span>
       <span class="sub">{s.text}</span>

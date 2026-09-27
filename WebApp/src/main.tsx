@@ -7,7 +7,9 @@ import { startSheetAutoRefresh } from './import/liveSheet';
 import { startClashRadar } from './calendar/radar';
 import { parsePairLink } from './pair/pair';
 import { loadFeedStatus, publishFeed, schedulePublishFeed } from './calendar/feed';
-import { inNexusDesk, initReminders } from './reminders/push';
+import { initReminders } from './reminders/push';
+import { onAnnounce } from './state/broadcast';
+import { inNexusDesk } from './state/desk';
 import * as nav from './state/nav';
 import { allTasks, onTasksWritten, reload } from './state/store';
 import { finishRedirectSignIn, onSyncState, runSync, scheduleSync } from './sync/manager';
@@ -17,6 +19,7 @@ import { getSettings, initSettings, patchSettings } from './settings/store';
 import { App } from './view/App';
 import { MiniApp } from './view/MiniWindow';
 import { PromptHost } from './view/PromptHost';
+import { QuickAddWindow } from './view/QuickAddWindow';
 import { Toasts } from './view/Shell';
 import { Splash } from './view/Splash';
 
@@ -30,21 +33,26 @@ ensureOAuthClientConsistency(() => patchSettings({ driveFileId: '', lastSyncErro
 const ready = reload();
 
 /**
- * Desktop widget (?mode=widget): the page Nexus Desk shows in its floating window on Mac and
- * Windows. Compact, no splash or tour, and no notifications of its own (the full app or the
- * phone already rings, so a widget must never double them). Remembered for the tab so a
- * Google sign-in round trip comes back to the widget.
+ * Boot modes (docs/premium-desk-architecture.md §4.1):
+ * - ?mode=quickadd: the Desk's Quick Add panel (and the same page in a plain tab). Nothing but the composer.
+ * - ?mode=widget: the page Nexus Desk shows in its floating window on Mac and Windows. Compact,
+ *   no splash or tour, and no notifications of its own unless it is the Desk's ringing window.
+ *   Remembered for the tab so a Google sign-in round trip comes back to the widget.
+ * - otherwise the full app.
  */
+const quickAddMode = new URLSearchParams(location.search).get('mode') === 'quickadd';
 const WIDGET_KEY = 'nexus_widget_mode';
-const widgetMode = (() => {
-  const on = new URLSearchParams(location.search).get('mode') === 'widget';
-  try {
-    if (on) sessionStorage.setItem(WIDGET_KEY, '1');
-    return on || sessionStorage.getItem(WIDGET_KEY) === '1';
-  } catch {
-    return on;
-  }
-})();
+const widgetMode =
+  !quickAddMode &&
+  (() => {
+    const on = new URLSearchParams(location.search).get('mode') === 'widget';
+    try {
+      if (on) sessionStorage.setItem(WIDGET_KEY, '1');
+      return on || sessionStorage.getItem(WIDGET_KEY) === '1';
+    } catch {
+      return on;
+    }
+  })();
 
 /** ?view=calendar|matrix|today: a Desk window dedicated to one view (e.g. a separate calendar window). */
 const widgetView = (() => {
@@ -64,8 +72,36 @@ const widgetView = (() => {
   }
 })();
 
-if (widgetMode) bootWidget();
+// Another Nexus window on this device wrote tasks (or finished a sync): show them at once.
+let announceTimer = 0;
+const reloadSoon = () => {
+  clearTimeout(announceTimer);
+  announceTimer = window.setTimeout(() => void reload(), 150);
+};
+onAnnounce('tasks', reloadSoon);
+onAnnounce('sync', reloadSoon);
+
+if (quickAddMode) bootQuickAdd();
+else if (widgetMode) bootWidget();
 else bootApp();
+
+function bootQuickAdd() {
+  document.title = 'Quick Add · Nexus';
+  document.body.classList.add('nx-mini-body', 'nx-quickadd-page');
+  // Inside the Desk the page is see-through so the panel's vibrancy shows around the card.
+  if (inNexusDesk()) document.body.classList.add('nx-in-desk');
+  void ready.then(() => {
+    render(
+      <>
+        <QuickAddWindow />
+        <PromptHost />
+        <Toasts />
+      </>,
+      root!
+    );
+    if (import.meta.env.DEV) void installDevHook();
+  });
+}
 
 function bootWidget() {
   document.title = widgetView === 'calendar' ? 'Nexus Calendar Widget' : 'Nexus Widget';
@@ -99,6 +135,8 @@ function bootWidget() {
     // Changes from the phone or the full app show up within minutes, and at once when focused.
     window.setInterval(sync, 5 * 60_000);
     window.addEventListener('focus', () => scheduleSync(400));
+    // The Desk says when the Mac wakes from sleep or its display comes back.
+    (window as Window & { __nexusWake?: () => void }).__nexusWake = () => scheduleSync(2000);
   });
 }
 
@@ -120,7 +158,8 @@ function bootApp() {
   void ready.then(async () => {
     render(<App />, root!);
     if (import.meta.env.DEV) void installDevHook();
-    initReminders();
+    // In the Desk the widget window rings the reminders; the full window must not double them.
+    if (!inNexusDesk()) initReminders();
     startLinkedAutoRefresh();
     startSheetAutoRefresh();
     startClashRadar();
@@ -131,26 +170,22 @@ function bootApp() {
       await db.setMeta('pending_local_changes', '');
       scheduleSync(500);
     }
-    // Opened from a notification, a widget or an app shortcut.
+    // Opened from a notification, a widget, an app shortcut or the Desk.
     const q = new URLSearchParams(location.search);
-    const ref = q.get('task');
-    const action = q.get('action');
-    const openPage = q.get('open');
-    if (ref || action || openPage) history.replaceState(null, '', location.pathname);
+    if (q.has('task') || q.has('action') || q.has('open')) history.replaceState(null, '', location.pathname);
     if (pairLink) {
       nav.closeKind('onboarding');
       nav.open({ kind: 'pair', link: pairLink });
-    }
-    else if (ref) openTaskByUuid(ref);
-    else if (action === 'add') nav.open({ kind: 'add', priority: 'HIGH' });
-    else if (openPage === 'calendar') nav.open({ kind: 'calendar' });
-    else if (openPage === 'quadrant') {
-      const p = q.get('p');
-      if (p === 'HIGH' || p === 'MEDIUM' || p === 'LOW' || p === 'NONE') nav.open({ kind: 'full', priority: p });
-    } else if (getSettings().startView === 'calendar' && getSettings().profileOnboardingDone && getSettings().tutorialDone && !nav.top.value) {
+    } else if (!handleOpenQuery(q) && getSettings().startView === 'calendar' && getSettings().profileOnboardingDone && getSettings().tutorialDone && !nav.top.value) {
       // "Open Nexus on: Calendar". Back from it shows the matrix.
       nav.open({ kind: 'calendar' });
     }
+    // The Desk deep-links an already open full window the same way (§2.5).
+    (window as Window & { __nexusDeepLink?: (o: DeepLink) => boolean }).__nexusDeepLink = (o) => {
+      const p = new URLSearchParams();
+      for (const [k, v] of Object.entries(o ?? {})) if (v != null && v !== '') p.set(k, String(v));
+      return handleOpenQuery(p);
+    };
     // Live calendar feed: resend a few seconds after the last change (only if the content changed).
     // Tasks ticked off from a notification while Nexus was closed: sent now (skipped if unchanged).
     void loadFeedStatus().then(() => publishFeed());
@@ -164,9 +199,50 @@ function bootApp() {
   });
 }
 
+type DeepLink = { task?: string; action?: string; open?: string; p?: string };
+
+/**
+ * Deep links into the full app: `?task=<uuid>` opens a task, `?action=add` the add sheet,
+ * `?open=calendar|settings|quadrant` (with `p=` for the quadrant) a page. Returns whether
+ * anything was opened.
+ */
+function handleOpenQuery(q: URLSearchParams): boolean {
+  const ref = q.get('task');
+  const action = q.get('action');
+  const openPage = q.get('open');
+  if (ref) {
+    openTaskByUuid(ref);
+    return true;
+  }
+  if (action === 'add') {
+    nav.open({ kind: 'add', priority: 'HIGH' });
+    return true;
+  }
+  if (openPage === 'calendar') {
+    if (!nav.has('calendar')) nav.open({ kind: 'calendar' });
+    return true;
+  }
+  if (openPage === 'settings') {
+    if (!nav.has('settings')) nav.open({ kind: 'settings' });
+    return true;
+  }
+  if (openPage === 'quadrant') {
+    const p = q.get('p');
+    if (p === 'HIGH' || p === 'MEDIUM' || p === 'LOW' || p === 'NONE') {
+      nav.open({ kind: 'full', priority: p });
+      return true;
+    }
+  }
+  return false;
+}
+
 function openTaskByUuid(uuid: string) {
   const t = allTasks.value.find((x) => x.taskUuid === uuid && x.deletedAt === 0);
-  if (t) nav.open({ kind: 'detail', taskId: t.id });
+  if (!t) return;
+  // Already looking at it (a second notification tap): nothing to do.
+  const top = nav.top.value;
+  if (top?.kind === 'detail' && top.taskId === t.id) return;
+  nav.open({ kind: 'detail', taskId: t.id });
 }
 
 navigator.serviceWorker?.addEventListener('message', (e) => {
@@ -174,8 +250,8 @@ navigator.serviceWorker?.addEventListener('message', (e) => {
   if (msg.type === 'nexus:reload') {
     void reload();
     void db.setMeta('pending_local_changes', '').then(() => scheduleSync(300));
-  } else if (msg.type === 'nexus:open-task' && msg.ref && !widgetMode) openTaskByUuid(msg.ref);
-  else if (msg.type === 'nexus:open-calendar' && !widgetMode && !nav.has('calendar')) nav.open({ kind: 'calendar' });
+  } else if (msg.type === 'nexus:open-task' && msg.ref && !widgetMode && !quickAddMode) openTaskByUuid(msg.ref);
+  else if (msg.type === 'nexus:open-calendar' && !widgetMode && !quickAddMode && !nav.has('calendar')) nav.open({ kind: 'calendar' });
 });
 
 if ('serviceWorker' in navigator) {
@@ -184,7 +260,7 @@ if ('serviceWorker' in navigator) {
 
 /** Dev-only handle for scripted UI checks (tree-shaken out of production builds). */
 async function installDevHook(): Promise<void> {
-  const [store, settings, manager, prompts, linked, ics, pair, feed, sheet] = await Promise.all([
+  const [store, settings, manager, prompts, linked, ics, pair, feed, sheet, desk] = await Promise.all([
     import('./state/store'),
     import('./settings/store'),
     import('./sync/manager'),
@@ -193,7 +269,8 @@ async function installDevHook(): Promise<void> {
     import('./calendar/ics'),
     import('./pair/pair'),
     import('./calendar/feed'),
-    import('./import/liveSheet')
+    import('./import/liveSheet'),
+    import('./state/desk')
   ]);
-  Object.assign(window, { __nx: { nav, store, settings, manager, prompts, db, linked, ics, pair, feed, sheet } });
+  Object.assign(window, { __nx: { nav, store, settings, manager, prompts, db, linked, ics, pair, feed, sheet, desk } });
 }

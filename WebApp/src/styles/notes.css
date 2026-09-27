@@ -1,0 +1,24 @@
+/* Notes editor: image blocks (docs §4.5). Line/list styles stay in views.css. */
+
+.nx-note-line--image { align-items: center; padding: 6px 0; }
+.nx-note-img-wrap { position: relative; display: inline-flex; max-width: 100%; border-radius: 12px; outline: none; }
+.nx-note-img-wrap:focus-visible { box-shadow: 0 0 0 2px var(--nx-bg), 0 0 0 4px var(--nx-accent); }
+.nx-note-img { display: inline-flex; max-width: 100%; min-width: 96px; min-height: 64px; border-radius: 12px; overflow: hidden; background: var(--nx-surfaceEl); }
+.nx-note-img img { display: block; max-height: 240px; max-width: 100%; width: auto; height: auto; border-radius: 12px; cursor: zoom-in; object-fit: contain; }
+.nx-note-img--missing { align-items: center; justify-content: center; padding: 14px 18px; color: var(--nx-textTer); font-size: 12px; border: 1px dashed var(--nx-stroke); }
+
+/* Shimmer while the picture is fetched from Drive. */
+.nx-note-img__shimmer { width: 180px; height: 120px; border-radius: 12px;
+  background: linear-gradient(100deg, var(--nx-surfaceEl) 30%, color-mix(in srgb, var(--nx-textTer) 22%, var(--nx-surfaceEl)) 50%, var(--nx-surfaceEl) 70%);
+  background-size: 250% 100%; animation: nx-note-shimmer 1.3s ease-in-out infinite; }
+@keyframes nx-note-shimmer { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+@media (prefers-reduced-motion: reduce) { .nx-note-img__shimmer { animation: none; } }
+
+.nx-note-img-x { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; border-radius: 50%; border: 0; padding: 0;
+  display: grid; place-items: center; font-size: 13px; line-height: 1; cursor: pointer;
+  color: #fff; background: rgba(0, 0, 0, 0.55); opacity: 0; transition: opacity 140ms; }
+.nx-note-img-wrap:hover .nx-note-img-x, .nx-note-img-wrap:focus-within .nx-note-img-x, .nx-note-img-wrap:focus-visible .nx-note-img-x { opacity: 1; }
+@media (hover: none) { .nx-note-img-x { opacity: 1; } }
+
+.nx-detail-notes.nx-note-drop { outline: 2px dashed var(--nx-accent); outline-offset: 4px; border-radius: 10px; }
+.nx-tool-file { display: none; }

@@ -9,7 +9,7 @@ import type { Priority, Task } from '../types';
 import { PRIORITIES, PRIORITY_META } from '../types';
 import { Icon, type IconName } from './icons';
 import { Menu, Sheet } from './kit';
-import { animate, STANDARD } from './motion';
+import { play, SPRING_SNAPPY } from './motion';
 
 /** How long "Added" stays under the field after Enter (a beat, not a toast). */
 const ADDED_MS = 1600;
@@ -50,7 +50,7 @@ export function AddTaskSheet({ priority: initial, locked, text: initialText = ''
   const meta = PRIORITY_META[effective];
   const chipKey = smart?.chips.map((c) => c.kind + c.text).join('|') ?? '';
   useLayoutEffect(() => {
-    if (chipKey) animate(chipsRef.current, [{ opacity: 0, transform: 'translateY(-3px)' }, { opacity: 1, transform: 'none' }], { duration: 160, easing: STANDARD });
+    if (chipKey) play(chipsRef.current, [{ opacity: 0, transform: 'translateY(-3px)' }, { opacity: 1, transform: 'none' }], SPRING_SNAPPY, 'chips');
   }, [chipKey]);
 
   useLayoutEffect(() => {

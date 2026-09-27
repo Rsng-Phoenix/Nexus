@@ -5,7 +5,8 @@ import { parseDueAlerts } from '../calendar/due';
 import { columnLetter, isEmptyRow, type Cell } from '../import/cell';
 import { csvRowsToCells, parseCsv } from '../import/csv';
 import { detectDayFirst, detectHeaderRow, suggestDateColumn } from '../import/dates';
-import { fetchSheetRows, linkSheet, parseSheetUrl, sheetFileName, type SheetRef } from '../import/liveSheet';
+import { fetchSheetRows, linkSheet, parseSheetUrl, SheetError, sheetFileName, type SheetRef } from '../import/liveSheet';
+import { chooseSheetInDrive, pickerAvailable, takePendingSheet } from '../import/picker';
 import { buildImportPlan, cellText, type ImportPlan, type ImportPriority } from '../import/plan';
 import { readXlsx } from '../import/xlsx';
 import { haptic } from '../lib/haptics';
@@ -33,12 +34,17 @@ export function SheetImportPage(p: LayerProps & { file?: File }) {
   const s = getSettings();
   const [book, setBook] = useState<Book | null>(null);
   // Google Sheet source: the pasted link, the parsed address once read, and whether to keep it updating.
-  const [sheetLink, setSheetLink] = useState('');
+  // A link kept across a Google sign-in that left the page (picker.ts) is read again right away.
+  const [pendingLink] = useState(() => (p.file ? '' : takePendingSheet()));
+  const [sheetLink, setSheetLink] = useState(pendingLink);
   const [sheetRef, setSheetRef] = useState<SheetRef | null>(null);
   const [reading, setReading] = useState(false);
   const [keepUpdating, setKeepUpdating] = useState(true);
   const [sheetName, setSheetName] = useState('');
   const [loadError, setLoadError] = useState('');
+  // The sheet is private to its organisation: offer "Choose in Google Drive" (import/picker.ts).
+  const [needsPick, setNeedsPick] = useState(false);
+  const [picking, setPicking] = useState(false);
   const [step, setStep] = useState(0);
   const [sheetIdx, setSheetIdx] = useState(0);
   const [hasHeader, setHasHeader] = useState(true);
@@ -56,13 +62,14 @@ export function SheetImportPage(p: LayerProps & { file?: File }) {
   const [plan, setPlan] = useState<ImportPlan | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const readSheet = async () => {
-    const ref = parseSheetUrl(sheetLink);
+  const readSheet = async (link = sheetLink) => {
+    const ref = parseSheetUrl(link);
     if (!ref) {
       setLoadError('Paste the link from Google Sheets (Share → Copy link). It starts with https://docs.google.com/spreadsheets/d/…');
       return;
     }
     setLoadError('');
+    setNeedsPick(false);
     setReading(true);
     try {
       const rows = await fetchSheetRows(ref);
@@ -71,8 +78,26 @@ export function SheetImportPage(p: LayerProps & { file?: File }) {
       setBook({ sheets: [{ name: '', rows, truncated: rows.length >= 5000 }], date1904: false });
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'This sheet could not be read.');
+      setNeedsPick(e instanceof SheetError && e.needsPick);
     } finally {
       setReading(false);
+    }
+  };
+  useEffect(() => {
+    if (pendingLink) void readSheet(pendingLink);
+  }, []);
+
+  // "Choose in Google Drive": the Picker grants Nexus this one file, then the sheet is read again.
+  const chooseInDrive = async () => {
+    const ref = parseSheetUrl(sheetLink);
+    if (!ref) return;
+    setPicking(true);
+    try {
+      if (await chooseSheetInDrive(ref, sheetLink)) await readSheet();
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : 'Choosing the sheet failed.');
+    } finally {
+      setPicking(false);
     }
   };
 
@@ -237,13 +262,21 @@ export function SheetImportPage(p: LayerProps & { file?: File }) {
             aria-label="Google Sheet link"
           />
           {loadError && <p class="err">{loadError}</p>}
-          <PrimaryButton icon="link" disabled={reading || !sheetLink.trim()} onClick={() => void readSheet()}>
-            {reading ? 'Reading…' : 'Read sheet'}
-          </PrimaryButton>
+          {needsPick && pickerAvailable() ? (
+            <PrimaryButton icon="cloud" disabled={picking || reading} onClick={() => void chooseInDrive()}>
+              {picking ? 'Waiting for Google Drive…' : 'Choose in Google Drive'}
+            </PrimaryButton>
+          ) : (
+            <PrimaryButton icon="link" disabled={reading || !sheetLink.trim()} onClick={() => void readSheet()}>
+              {reading ? 'Reading…' : 'Read sheet'}
+            </PrimaryButton>
+          )}
           <p class="hint">
             The sheet must be shared as “Anyone with the link” (Viewer): in Google Sheets, Share → General access. Nexus reads it straight from
             Google on this device; to open the tab you want, copy the link while that tab is showing.
+            {needsPick && pickerAvailable() && ' A sheet that’s private to your organisation can’t be shared that way: choose it in Google Drive once instead, and Nexus (here and on your phone) reads it with your account.'}
           </p>
+          {needsPick && !pickerAvailable() && import.meta.env.DEV && <p class="hint">Org-restricted sheets need the Google Picker key (see config.ts).</p>}
         </div>
       );
     if (loadError) return <p class="err">{loadError}</p>;
