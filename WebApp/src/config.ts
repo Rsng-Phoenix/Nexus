@@ -14,10 +14,10 @@ export const APP_VERSION = '5.0';
  * then needs the "Anyone with the link" sharing. To create the key (free, no verification):
  * Google Cloud console → APIs & Services → Library → enable "Google Picker API" → Credentials →
  * Create credentials → API key → restrict it to the Google Picker API and to the HTTP referrers of
- * the site (the deployed origin, plus http://localhost:* for dev). It is a browser key: public by
+ * the site (the deployed origin, plus http://localhost:5173 for dev). It is a browser key: public by
  * design, it only names the project.
  */
-export const GOOGLE_PICKER_API_KEY = 'AIzaSyAcwlEZxY18u40n-1YHgA5KgBBrWlAiyhw';
+export const GOOGLE_PICKER_API_KEY: string = 'AIzaSyAcwlEZxY18u40n-1YHgA5KgBBrWlAiyhw';
 
 /** The Cloud project number (the prefix of sync/auth.ts GOOGLE_CLIENT_ID); the Picker needs it to grant drive.file per file. */
 export const GOOGLE_PROJECT_NUMBER = '273347997748';
