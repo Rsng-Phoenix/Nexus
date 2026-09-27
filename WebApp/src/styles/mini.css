@@ -48,6 +48,12 @@
 .nx-mini-composer.pick .cell.on { border-color: var(--c); background: color-mix(in srgb, var(--c) 14%, var(--nx-surfaceEl)); transform: scale(1.02); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 14%, transparent); }
 .nx-mini-composer.pick .foot { grid-column: 1 / -1; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; padding: 2px 0 0; font-size: 10.5px; color: var(--nx-textTer); }
 .nx-mini-composer.pick .foot span { display: inline-flex; align-items: center; gap: 4px; }
+.nx-mini-composer.pick .foot .back { display: inline-flex; align-items: center; gap: 4px; font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+.nx-mini-composer.pick .foot .back:hover { color: var(--nx-textPri); }
+.nx-mini-composer.pick .cell { animation: nx-mini-cell 320ms var(--ease-bouncy) backwards; animation-delay: calc(var(--i) * 35ms); }
+.nx-mini-composer.type { animation: nx-mini-type 260ms var(--ease-bouncy) backwards; }
+@keyframes nx-mini-cell { from { opacity: 0; transform: translateY(6px) scale(0.92); } }
+@keyframes nx-mini-type { from { opacity: 0; transform: scaleX(0.94); } }
 .nx-mini-composer.type { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 10px 0 8px; border-color: color-mix(in srgb, var(--c) 45%, var(--nx-stroke)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 16%, transparent); background: color-mix(in srgb, var(--c) 5%, var(--nx-surface)); transition: border-color 200ms, box-shadow 200ms, background-color 200ms; }
 .nx-mini-composer.type .tag { flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 8.5px; font-weight: 800; color: #fff; background: var(--c); animation: nx-mini-pop 320ms var(--ease-bouncy); }
 .nx-mini-composer.type input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--nx-textPri); font-size: 13px; caret-color: var(--c); }

@@ -234,6 +234,20 @@ const SETTLE_MS = 380;
  * (arrows, 1–4, Tab; ⏎ confirms; typing confirms and keeps the keystroke), then a field tinted
  * with the priority (⏎ adds, reads dates/times/"!1" like everywhere else, esc goes back).
  */
+/** The widget's entrance, replayed when Nexus Desk brings it back (the page itself never reloads). */
+function replayEntrance() {
+  if (document.documentElement.dataset.motion === 'reduced' || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const els = document.querySelectorAll<HTMLElement>('.nx-mini-composer, .nx-mini-quad, .nx-mini-list, .nx-mini-cal .grid');
+  els.forEach((el, i) => {
+    el.animate([{ opacity: 0, transform: 'translateY(10px) scale(0.98)' }, { opacity: 1, transform: 'none' }], {
+      duration: 380,
+      delay: Math.min(i, 6) * 45,
+      easing: 'cubic-bezier(0.34, 1.56, 0.64, 1)',
+      fill: 'backwards'
+    });
+  });
+}
+
 function Composer({ widget }: { widget: boolean }) {
   const [mode, setMode] = useState<'idle' | 'pick' | 'type'>('idle');
   const [sel, setSelState] = useState<Priority>(lastPicked);
@@ -247,6 +261,7 @@ function Composer({ widget }: { widget: boolean }) {
   };
   const [text, setText] = useState('');
   const input = useRef<HTMLInputElement>(null);
+  const root = useRef<HTMLDivElement>(null);
 
   const start = () => {
     if (modeRef.current !== 'idle') {
@@ -275,6 +290,15 @@ function Composer({ widget }: { widget: boolean }) {
     haptic('FAB_TAP');
     void addSmartTasks([v], selRef.current);
   };
+  // A click anywhere outside the open picker folds it back, like Esc.
+  useEffect(() => {
+    if (mode !== 'pick') return;
+    const onDown = (e: PointerEvent) => {
+      if (root.current && e.target instanceof Node && !root.current.contains(e.target)) back();
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    return () => document.removeEventListener('pointerdown', onDown, true);
+  }, [mode]);
   useLayoutEffect(() => {
     if (mode !== 'type') return;
     const el = input.current;
@@ -288,6 +312,8 @@ function Composer({ widget }: { widget: boolean }) {
     // the whole page (Desk / widget), never the mini window beside the matrix.
     if (widget) {
       w.__nexusQuickAdd = start;
+      // Nexus Desk calls this each time the widget appears: the quadrants rise in again.
+      (w as Window & { __nexusShown?: () => void }).__nexusShown = replayEntrance;
       // Text sent from outside (Services "Add to Nexus", nexus://add) when the panel isn't in use:
       // first line is the title, the rest the notes.
       w.__nexusQuickAddFallback = (raw) => {
@@ -328,6 +354,7 @@ function Composer({ widget }: { widget: boolean }) {
       if (widget) {
         delete w.__nexusQuickAdd;
         delete w.__nexusQuickAddFallback;
+        delete (w as Window & { __nexusShown?: () => void }).__nexusShown;
       }
       window.removeEventListener('keydown', onKey);
     };
@@ -343,7 +370,7 @@ function Composer({ widget }: { widget: boolean }) {
     );
   if (mode === 'pick')
     return (
-      <div class="nx-mini-composer pick" role="listbox" aria-label="Choose a priority for the new task" aria-activedescendant={`mini-pick-${sel}`}>
+      <div ref={root} class="nx-mini-composer pick" role="listbox" aria-label="Choose a priority for the new task" aria-activedescendant={`mini-pick-${sel}`}>
         {PRIORITIES.map((p, i) => {
           const m = PRIORITY_META[p];
           const open = byPriority.value[p].filter((t) => !t.isCompleted && !t.isWontDo).length;
@@ -354,7 +381,7 @@ function Composer({ widget }: { widget: boolean }) {
               role="option"
               aria-selected={sel === p}
               class={`cell ${sel === p ? 'on' : ''}`}
-              style={{ '--c': m.color } as JSX.CSSProperties}
+              style={{ '--c': m.color, '--i': i } as JSX.CSSProperties}
               onMouseEnter={() => setSel(p)}
               onClick={() => pick(p)}
             >
@@ -368,7 +395,9 @@ function Composer({ widget }: { widget: boolean }) {
         <div class="foot">
           <span><kbd>↑↓←→</kbd> move</span>
           <span><kbd>⏎</kbd> choose · or just type</span>
-          <span><kbd>esc</kbd> back</span>
+          <button type="button" class="back" onClick={back}>
+            <kbd>esc</kbd> back
+          </button>
         </div>
       </div>
     );
