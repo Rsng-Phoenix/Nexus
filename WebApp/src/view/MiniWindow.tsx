@@ -14,7 +14,7 @@ import { calendarSourceLabel, linkedState } from '../calendar/linked';
 import { haptic } from '../lib/haptics';
 import { pickerKey } from '../lib/pickerKeys';
 import { settingsSig, subscribeSettings } from '../settings/store';
-import { inNexusDesk, openFullInDesk } from '../state/desk';
+import { deskPost, inNexusDesk, openFullInDesk } from '../state/desk';
 import { showSnack } from '../state/toasts';
 import { runSync, signInMessage } from '../sync/manager';
 import * as nav from '../state/nav';
@@ -138,6 +138,15 @@ const fresh = (t: Task): Task => allTasks.value.find((x) => x.id === t.id) ?? t;
 /** Which task is open in place (one at a time). */
 const openTask = signal<number | null>(null);
 
+/** Bumped to ask the composer to start (Desk shortcut, N): it may mount only after a tab switch. */
+const composeReq = signal(0);
+/** The last request the composer acted on. */
+let composeSeen = 0;
+/** The composer's mode right now ('idle' while it isn't mounted, e.g. on the Calendar tab). */
+let composerMode: 'idle' | 'pick' | 'type' = 'idle';
+
+type DeskHooks = Window & { __nexusQuickAdd?: () => void; __nexusQuickAddFallback?: (text: string) => void; __nexusShown?: () => void };
+
 /**
  * The mini window's content. [widget]: running as the desktop widget page (Nexus Desk on Mac /
  * Windows) rather than inside the full app, so "open" launches the full app in the browser.
@@ -151,11 +160,15 @@ export function MiniApp({ win, widget = false, only }: { win: Window; widget?: b
   });
   const [signingIn, setSigningIn] = useState(false);
   const email = settingsSig.value.googleEmail;
+  // The Desk's hooks outlive renders: they read the tab through this ref, never a stale closure.
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
 
   const choose = (t: Tab) => {
-    if (t === tab) return;
+    if (t === tabRef.current) return;
     haptic('DRAG_TICK');
     openTask.value = null;
+    tabRef.current = t;
     setTab(t);
     try {
       localStorage.setItem('nexus_mini_tab', t);
@@ -163,6 +176,53 @@ export function MiniApp({ win, widget = false, only }: { win: Window; widget?: b
       /* ignore */
     }
   };
+  const chooseRef = useRef(choose);
+  chooseRef.current = choose;
+
+  // Nexus Desk's hooks (widget page only). They live here, not in the composer, which isn't
+  // mounted on the Calendar tab: the shortcut must work from every tab.
+  useEffect(() => {
+    if (!widget) return;
+    const w = win as DeskHooks;
+    // A window dedicated to the calendar has no composer at all.
+    const composes = only !== 'calendar';
+    const compose = (toMatrix: boolean) => {
+      if (toMatrix && !only) chooseRef.current('matrix');
+      composeReq.value++;
+    };
+    if (composes) {
+      // Nexus Desk's shortcut from any app (⌃⌥N on Mac) lands here, on the picker.
+      w.__nexusQuickAdd = () => compose(true);
+      // Text sent from outside (Services "Add to Nexus", nexus://add) when the panel isn't in use:
+      // first line is the title, the rest the notes.
+      w.__nexusQuickAddFallback = (raw) => {
+        const lines = String(raw ?? '').replace(/\r\n?/g, '\n').split('\n').map((l) => l.trim());
+        const title = lines.shift() ?? '';
+        if (title) void addSmartTasks([title], lastPicked, lines.filter(Boolean).join('\n'));
+      };
+    }
+    // Nexus Desk calls this each time the widget appears: the quadrants rise in again.
+    w.__nexusShown = replayEntrance;
+    const onKey = (e: KeyboardEvent) => {
+      // N (or Enter) anywhere in the window starts a task, like on the full matrix. Nexus Desk for
+      // Windows sends an "n" after Ctrl+Alt+N.
+      if (!composes || composerMode !== 'idle' || e.defaultPrevented) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.repeat || e.isComposing) return;
+      const t = e.target as Element | null;
+      if (t?.closest?.('input, textarea, select, [contenteditable="true"], [role="dialog"], button, a')) return;
+      if (e.key !== 'n' && e.key !== 'N' && e.key !== 'Enter') return;
+      e.preventDefault();
+      compose(tabRef.current === 'calendar');
+    };
+    win.addEventListener('keydown', onKey);
+    deskPost({ ready: 'widget' });
+    return () => {
+      delete w.__nexusQuickAdd;
+      delete w.__nexusQuickAddFallback;
+      delete w.__nexusShown;
+      win.removeEventListener('keydown', onKey);
+    };
+  }, [widget, only, win]);
   const open = activeTasks.value.filter((t) => !t.isCompleted && !t.isWontDo && !t.taskUuid.startsWith('nexus-tutorial-'));
   return (
     <div class="nx-mini">
@@ -216,7 +276,7 @@ export function MiniApp({ win, widget = false, only }: { win: Window; widget?: b
           </button>
         </div>
       )}
-      {tab !== 'calendar' && <Composer widget={widget} />}
+      {tab !== 'calendar' && <Composer win={win} />}
       <div class="nx-mini-scroll" key={tab}>
         {tab === 'matrix' ? <MiniMatrix widget={widget} /> : tab === 'today' ? <MiniToday widget={widget} /> : <MiniCalendar widget={widget} />}
       </div>
@@ -248,13 +308,14 @@ function replayEntrance() {
   });
 }
 
-function Composer({ widget }: { widget: boolean }) {
+function Composer({ win }: { win: Window }) {
   const [mode, setMode] = useState<'idle' | 'pick' | 'type'>('idle');
   const [sel, setSelState] = useState<Priority>(lastPicked);
   // Keys can arrive faster than re-renders: always act on the latest highlight / mode.
   const selRef = useRef<Priority>(lastPicked);
   const modeRef = useRef(mode);
   modeRef.current = mode;
+  composerMode = mode;
   const setSel = (p: Priority) => {
     selRef.current = p;
     setSelState(p);
@@ -265,7 +326,8 @@ function Composer({ widget }: { widget: boolean }) {
 
   const start = () => {
     if (modeRef.current !== 'idle') {
-      input.current?.focus();
+      if (modeRef.current === 'pick') root.current?.focus();
+      else input.current?.focus();
       return;
     }
     haptic('DRAG_TICK');
@@ -290,75 +352,61 @@ function Composer({ widget }: { widget: boolean }) {
     haptic('FAB_TAP');
     void addSmartTasks([v], selRef.current);
   };
-  // A click anywhere outside the open picker folds it back, like Esc.
+  // A click anywhere outside the open picker folds it back, like Esc. Bound to the window the
+  // composer is drawn in (the PiP mini window is not the opener's document).
   useEffect(() => {
     if (mode !== 'pick') return;
+    const doc = win.document;
     const onDown = (e: PointerEvent) => {
-      if (root.current && e.target instanceof Node && !root.current.contains(e.target)) back();
+      // No `instanceof Node`: nodes of the PiP window belong to another realm.
+      const t = e.target as Node | null;
+      if (root.current && t && !root.current.contains(t)) back();
     };
-    document.addEventListener('pointerdown', onDown, true);
-    return () => document.removeEventListener('pointerdown', onDown, true);
-  }, [mode]);
+    doc.addEventListener('pointerdown', onDown, true);
+    return () => doc.removeEventListener('pointerdown', onDown, true);
+  }, [mode, win]);
   useLayoutEffect(() => {
+    if (mode === 'pick') {
+      // The listbox takes focus so its aria-activedescendant is announced; keys still reach `win`.
+      root.current?.focus();
+      return;
+    }
     if (mode !== 'type') return;
     const el = input.current;
     el?.focus();
     el?.setSelectionRange(el.value.length, el.value.length);
   }, [mode]);
+  // Not mounted: counts as idle for the window-wide N key (MiniApp).
+  useEffect(() => () => void (composerMode = 'idle'), []);
 
+  // A start asked for by MiniApp (Desk shortcut, N), possibly before this composer was mounted.
+  const req = composeReq.value;
   useEffect(() => {
-    const w = window as Window & { __nexusQuickAdd?: () => void; __nexusQuickAddFallback?: (text: string) => void };
-    // Nexus Desk's shortcut from any app (⌃⌥N on Mac) lands here, on the picker. Only when this is
-    // the whole page (Desk / widget), never the mini window beside the matrix.
-    if (widget) {
-      w.__nexusQuickAdd = start;
-      // Nexus Desk calls this each time the widget appears: the quadrants rise in again.
-      (w as Window & { __nexusShown?: () => void }).__nexusShown = replayEntrance;
-      // Text sent from outside (Services "Add to Nexus", nexus://add) when the panel isn't in use:
-      // first line is the title, the rest the notes.
-      w.__nexusQuickAddFallback = (raw) => {
-        const lines = String(raw ?? '').replace(/\r\n?/g, '\n').split('\n').map((l) => l.trim());
-        const title = lines.shift() ?? '';
-        if (title) void addSmartTasks([title], lastPicked, lines.filter(Boolean).join('\n'));
-      };
-    }
+    if (req === composeSeen) return;
+    composeSeen = req;
+    start();
+  }, [req]);
+
+  // The open picker's keys. Only refs and state setters inside, so the first closure stays valid.
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const t = e.target;
-      const inField = t instanceof Element && !!t.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]');
-      if (modeRef.current === 'pick') {
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          return back();
-        }
-        const a = pickerKey(e, selRef.current);
-        if (!a) return;
+      if (modeRef.current !== 'pick' || e.isComposing) return;
+      if (e.key === 'Escape') {
         e.preventDefault();
-        if (a.type === 'choose') pick(a.priority, a.text);
-        else if (a.priority !== selRef.current) {
-          haptic('DRAG_TICK');
-          setSel(a.priority);
-        }
-        return;
+        return back();
       }
-      if (!widget || modeRef.current !== 'idle') return;
-      // N (or Enter) anywhere in the window starts a task, like on the full matrix. Nexus Desk for
-      // Windows sends an "n" after Ctrl+Alt+N.
-      if (e.metaKey || e.ctrlKey || e.altKey || e.repeat || inField) return;
-      if (t instanceof Element && t.closest('button, a')) return;
-      if (e.key !== 'n' && e.key !== 'N' && e.key !== 'Enter') return;
+      const a = pickerKey(e, selRef.current);
+      if (!a) return;
       e.preventDefault();
-      start();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => {
-      if (widget) {
-        delete w.__nexusQuickAdd;
-        delete w.__nexusQuickAddFallback;
-        delete (w as Window & { __nexusShown?: () => void }).__nexusShown;
+      if (a.type === 'choose') pick(a.priority, a.text);
+      else if (a.priority !== selRef.current) {
+        haptic('DRAG_TICK');
+        setSel(a.priority);
       }
-      window.removeEventListener('keydown', onKey);
     };
-  }, []);
+    win.addEventListener('keydown', onKey);
+    return () => win.removeEventListener('keydown', onKey);
+  }, [win]);
 
   if (mode === 'idle')
     return (
@@ -370,7 +418,7 @@ function Composer({ widget }: { widget: boolean }) {
     );
   if (mode === 'pick')
     return (
-      <div ref={root} class="nx-mini-composer pick" role="listbox" aria-label="Choose a priority for the new task" aria-activedescendant={`mini-pick-${sel}`}>
+      <div ref={root} class="nx-mini-composer pick" role="listbox" tabIndex={0} aria-label="Choose a priority for the new task" aria-activedescendant={`mini-pick-${sel}`}>
         {PRIORITIES.map((p, i) => {
           const m = PRIORITY_META[p];
           const open = byPriority.value[p].filter((t) => !t.isCompleted && !t.isWontDo).length;
@@ -426,11 +474,12 @@ function Composer({ widget }: { widget: boolean }) {
             e.preventDefault();
             if (text) setText('');
             else back();
-          } else if (e.altKey && /^[1-4]$/.test(e.key)) {
-            // Alt+1…4 switches the priority without leaving the field.
+          } else if (e.altKey && /^Digit[1-4]$/.test(e.code)) {
+            // Alt+1…4 switches the priority without leaving the field (by key position: on a Mac
+            // Option turns e.key into "¡", "™"…).
             e.preventDefault();
             haptic('DRAG_TICK');
-            lastPicked = PRIORITIES[Number(e.key) - 1];
+            lastPicked = PRIORITIES[Number(e.code.slice(5)) - 1];
             setSel(lastPicked);
           }
         }}
@@ -756,10 +805,14 @@ function PeekImage({ id }: { id: string }) {
 function TaskPeek({ task, widget }: { task: Task; widget: boolean }) {
   const blocks = useMemo(() => fromStorage(task.notes ?? ''), [task.notes]);
   const hasNotes = blocks.some((b) => b.text.trim());
-  const toggleItem = (id: string) => {
-    haptic('CHECK');
+  // By position, not id: plain-text notes get fresh random ids on every parse.
+  const toggleItem = (index: number) => {
     const cur = fresh(task);
-    const next = fromStorage(cur.notes ?? '').map((b) => (b.id === id ? { ...b, checked: !b.checked } : b));
+    const next = fromStorage(cur.notes ?? '');
+    const b = next[index];
+    if (b?.type !== 'CHECKBOX' || b.text !== blocks[index]?.text) return;
+    haptic('CHECK');
+    next[index] = { ...b, checked: !b.checked };
     void updateTask({ ...cur, notes: toStorage(next) });
   };
   const setDue = (iso: string) => {
@@ -771,14 +824,14 @@ function TaskPeek({ task, widget }: { task: Task; widget: boolean }) {
     <div class="nx-mini-peek">
       {hasNotes ? (
         <div class="notes">
-          {blocks.map((b) => {
+          {blocks.map((b, i) => {
             if (!b.text.trim() && b.type !== 'CHECKBOX') return null;
             n = b.type === 'NUMBERED' ? n + 1 : 0;
             const pad = { paddingLeft: `${b.indent * 12}px` };
             if (b.type === 'IMAGE') return <PeekImage key={b.id} id={imageIdOf(b) ?? ''} />;
             if (b.type === 'CHECKBOX')
               return (
-                <button key={b.id} class={`item ${b.checked ? 'on' : ''}`} style={pad} onClick={() => toggleItem(b.id)}>
+                <button key={b.id} class={`item ${b.checked ? 'on' : ''}`} style={pad} onClick={() => toggleItem(i)}>
                   <span class="box">{b.checked && <Icon name="check" size={10} />}</span>
                   <span>{b.text || ' '}</span>
                 </button>

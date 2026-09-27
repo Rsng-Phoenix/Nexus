@@ -223,6 +223,7 @@ function loadRaw(): Settings {
       delete (s as { calendarRefreshHours?: number }).calendarRefreshHours;
       s.schema = 4;
     }
+    s.fontScale = Math.min(1.45, Math.max(0.85, Number(s.fontScale) || 1));
     s.calendarRefreshMinutes = nearestRefresh(Number(s.calendarRefreshMinutes) || DEFAULTS.calendarRefreshMinutes);
     if (!MEETING_LEAD_CHOICES.includes(s.meetingLeadMinutes as (typeof MEETING_LEAD_CHOICES)[number])) s.meetingLeadMinutes = 10;
     if (s.startView !== 'calendar') s.startView = 'matrix';
@@ -296,13 +297,41 @@ export function subscribeSettings(fn: () => void): () => void {
   return () => listeners.delete(fn);
 }
 
-export function patchSettings(p: Partial<Settings>): void {
-  settings = { ...settings, ...p };
-  save();
+/**
+ * What another window last stored (widget, full app and Quick Add are separate web views sharing
+ * this localStorage), or the in-memory copy when nothing is stored or storage can't be read.
+ */
+function freshSettings(): Settings {
+  try {
+    if (localStorage.getItem(KEY) == null) return settings;
+  } catch {
+    return settings; // private mode
+  }
+  return loadRaw();
+}
+
+function applyAll(): void {
   applyTheme();
   applyFontScale();
   applyLayout();
   applyMotion();
+}
+
+export function patchSettings(p: Partial<Settings>): void {
+  // Merged onto a fresh read: a stale in-memory copy must not undo another window's change.
+  settings = { ...freshSettings(), ...p };
+  save();
+  applyAll();
+}
+
+/** Another window changed the settings: take them over here too (the event never fires in the writer). */
+function onStorage(e: StorageEvent): void {
+  if (e.key !== KEY && e.key !== null) return; // null: storage was cleared
+  if (e.storageArea && e.storageArea !== localStorage) return;
+  settings = loadRaw();
+  settingsSig.value = settings;
+  listeners.forEach((l) => l());
+  applyAll();
 }
 
 /** Mirrors the Motion setting as `html[data-motion]`, which the stylesheets and motion.ts read. */
@@ -370,11 +399,9 @@ export function isSignedIn(): boolean {
 
 export function initSettings(): void {
   settings.fontScale = Math.min(1.45, Math.max(0.85, settings.fontScale));
-  applyTheme();
-  applyFontScale();
-  applyLayout();
-  applyMotion();
+  applyAll();
   installMotionTokens();
+  window.addEventListener('storage', onStorage);
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
     if (settings.themeMode === 'SYSTEM') applyTheme();
   });

@@ -33,7 +33,9 @@ export type DeskMessage =
   | { hotkey: 'change' }
   | { categories: { snooze: string } }
   | { openUrl: string }
-  | { focus: 'widget' };
+  | { focus: 'widget' }
+  /** A page's window.__nexus* hooks are installed: the Desk may call them from now on. */
+  | { ready: 'widget' | 'quickadd' | 'full' };
 
 type Handler = { postMessage(m: unknown): void };
 type DeskWindow = Window & {
@@ -48,7 +50,11 @@ const handler = (): Handler | null => win()?.webkit?.messageHandlers?.nexusDesk 
 /** What the Desk told us about itself (null in a browser). Re-read whenever the Desk re-injects it. */
 export const deskInfo = signal<Partial<DeskInfo> | null>(win()?.__nexusDeskInfo ?? null);
 const w = win();
-if (w) w.__nexusDeskInfoChanged = (info) => (deskInfo.value = info ?? null);
+if (w) {
+  w.__nexusDeskInfoChanged = (info) => (deskInfo.value = info ?? w.__nexusDeskInfo ?? null);
+  // Fallback: the Desk re-injects __nexusDeskInfo and announces it with a 'nexusdesk' event.
+  w.addEventListener?.('nexusdesk', () => (deskInfo.value = w.__nexusDeskInfo ?? null));
+}
 
 /** Running inside a Nexus Desk web view (the bridge exists, or the Desk announced itself). */
 export const inNexusDesk = (): boolean => !!handler() || !!win()?.__nexusDeskInfo;

@@ -103,8 +103,8 @@ const HOT_CORNER_DWELL_MS = 250;
 const TRIPWIRE = 4;
 // Quick Add panel geometry: Spotlight-like width, top edge at 22 % of the screen, height from the page.
 const QUICK_W = 680;
-const QUICK_H_DEFAULT = 440;
-const QUICK_H_MIN = 260;
+const QUICK_H_DEFAULT = 200;
+const QUICK_H_MIN = 96; // the card is the panel: as short as its content
 const QUICK_H_MAX = 720;
 const QUICK_TOP_RATIO = 0.22;
 const WIDGET_FADE_IN_S = 0.18;
@@ -115,6 +115,8 @@ const QUICK_MATERIAL = 13; // NSVisualEffectMaterialHUDWindow
 // Native motion is opacity only (cheap, never re-layouts the web view); shape motion is CSS in the page.
 const QUICK_SHOW_S = 0.16;
 const QUICK_HIDE_S = 0.12;
+// The panel following its content's height ({resize}); short enough to keep up with typing.
+const QUICK_RESIZE_S = 0.14;
 // The page plays its exit and then posts {close}; if it never answers (frozen, offline) hide anyway.
 const QUICK_HIDE_TIMEOUT_S = 0.4;
 // A presentational spring on the panel's scale (0.92 → 1). AppKit may reset the layer's anchor
@@ -128,6 +130,9 @@ const FULL_DEFAULT_H = 720;
 // Notification categories (the buttons under a notification).
 const CAT_TASK = 'NEXUS_TASK';
 const CAT_MEET = 'NEXUS_MEET';
+// Only a real task reminder gets Done / Snooze / Open: a grouped, overflow or check-in ring has
+// no single task behind it, and Done there would mark nothing (or the wrong thing).
+const TASK_NOTE_KINDS = ['task', 'due', 'task-s', 'due-s'];
 const SNOOZE_LABEL_DEFAULT = '10 min';
 
 // ─── Self-test mode ────────────────────────────────────────────────────────────
@@ -178,6 +183,29 @@ function later(fn) {
   });
 }
 
+/**
+ * Runs an ObjC → JS entry point (delegate, action, monitor, completion). An exception escaping
+ * one either pops the applet's error dialog or dies silently inside WebKit/AppKit: log it instead.
+ */
+function guard(name, fn) {
+  try {
+    return fn();
+  } catch (e) {
+    logLine(name + ': ' + e);
+    return undefined;
+  }
+}
+
+/**
+ * Brings the Desk forward for one of its own dialogs (Uninstall, Change shortcut) without
+ * becameActive: popping the widget up behind it. The caller clears suppressAutoShow when the
+ * dialog is gone.
+ */
+function activateForDialog() {
+  suppressAutoShow = true;
+  activateApp();
+}
+
 /** A dialog window the user must answer: above every Desk window, even if activation is refused. */
 function frontModal(win) {
   win.level = QUICK_LEVEL + 1;
@@ -191,7 +219,7 @@ function frontModal(win) {
  * instead of quietly quitting as if it had worked.
  */
 function uninstall() {
-  activateApp();
+  activateForDialog(); // cleared by the uninstall: action once the alert is answered
   const alert = $.NSAlert.alloc.init;
   alert.messageText = 'Uninstall Nexus Desk?';
   alert.informativeText =
@@ -250,9 +278,16 @@ function logLine(text) {
 let panel = null;
 let widgetHiddenForFull = false;
 let widgetFadeToken = 0;
+// becameActive: shows the widget when the Desk is brought forward from outside; while one of
+// the Desk's own dialogs is being activated it must not (see activateForDialog).
+let suppressAutoShow = false;
 let web = null;
 let statusItem = null;
 let controller = null;
+// Links, Services and notification taps can arrive before launch() has built the windows: they
+// wait here and run once it has (see whenLaunched).
+let launched = false;
+const launchQueue = [];
 let noteDelegate = null;
 const popups = [];
 let calPanel = null;
@@ -260,14 +295,20 @@ let calWeb = null;
 let fullWin = null;
 let fullWeb = null;
 let fullLoaded = false;
+// didFinishNavigation comes before the page has installed its window.__nexus* hooks; only its
+// {ready:'full'} message means __nexusDeepLink can be called.
+let fullReady = false;
 let fullHiddenAt = 0;
 let pendingDeepLink = null;
 let quickPanel = null;
 let quickWeb = null;
 let quickEffect = null;
 let quickLoaded = false;
+let quickReady = false; // the page posted {ready:'quickadd'}: its hooks exist
+let quickPrefillLoad = false; // the current page load carries ?text= / ?priority= (keepPrefill for the shown hook)
 let quickFailed = false;
 let quickHiding = false;
+let quickFadeToken = 0; // a fade's final alpha only lands if no newer show/hide started
 let quickHideTimer = null;
 let quickFallback = null; // {field, button, hint} native controls when the page can't load
 let pendingQuickAdd = []; // texts typed into the fallback while the widget page was unreachable
@@ -277,6 +318,9 @@ let recorderLabel = null;
 let recorderMsg = null;
 let recorderMonitor = null;
 let recorderCandidate = null;
+// The recorder took the global shortcut away (a registered Carbon hot key swallows its own combo
+// before the recorder sees it); recorderClose gives it back.
+let recorderHeldHotKey = false;
 let corners = [];
 let dwellTimer = null;
 let hotKeyRef = null;
@@ -323,7 +367,14 @@ function pushDeskInfo() {
     const ucc = v.configuration.userContentController;
     ucc.removeAllUserScripts;
     ucc.addUserScript($.WKUserScript.alloc.initWithSourceInjectionTimeForMainFrameOnly($(src), 0, true));
-    evalIn(v, src + 'window.dispatchEvent&&window.dispatchEvent(new CustomEvent("nexusdesk",{detail:window.__nexusDeskInfo}))');
+    // __nexusDeskInfoChanged: an open web Settings re-reads it, so a change made from the menu bar
+    // (shortcut, mode, corner, notifications, login, style) shows there without a reload.
+    evalIn(
+      v,
+      src +
+        'window.dispatchEvent&&window.dispatchEvent(new CustomEvent("nexusdesk",{detail:window.__nexusDeskInfo}));' +
+        'window.__nexusDeskInfoChanged&&window.__nexusDeskInfoChanged(window.__nexusDeskInfo)'
+    );
   });
 }
 
@@ -439,7 +490,9 @@ function isShown() {
 }
 
 function show() {
-  widgetFadeToken++; // cancels a fade-out still running
+  // Shown on purpose while the full window is open: closing it must not second-guess that.
+  widgetHiddenForFull = false;
+  const token = ++widgetFadeToken; // cancels a fade-out still running
   const wasHidden = !panel.isVisible || Number(panel.alphaValue) < 0.05;
   activateApp();
   if (calPanel) calPanel.orderFrontRegardless;
@@ -450,19 +503,34 @@ function show() {
   panel.makeFirstResponder(web);
   const target = pref('opacity', 1);
   // Also catches a fade-out caught halfway: the new animation replaces it.
-  if (wasHidden || Number(panel.alphaValue) < target - 0.01) fadeTo(panel, target, WIDGET_FADE_IN_S, () => {});
+  if (wasHidden || Number(panel.alphaValue) < target - 0.01)
+    fadeTo(
+      panel,
+      target,
+      WIDGET_FADE_IN_S,
+      () => token === widgetFadeToken, // hidden again mid-fade: leave the fade-out's alpha alone
+      () => {}
+    );
   if (wasHidden) evalIn(web, 'window.__nexusShown&&window.__nexusShown()');
 }
 
 function hide() {
+  // Hidden on purpose while the full window is open: closing it must not bring the widget back.
+  // (openFullWindow sets the flag again after its own hide.)
+  widgetHiddenForFull = false;
   if (calPanel) calPanel.orderOut(null);
   if (!panel.isVisible) return;
   const token = ++widgetFadeToken;
-  fadeTo(panel, 0, WIDGET_FADE_OUT_S, () => {
-    if (token !== widgetFadeToken) return; // shown again mid-fade: stay up
-    panel.orderOut(null);
-    panel.alphaValue = pref('opacity', 1);
-  });
+  fadeTo(
+    panel,
+    0,
+    WIDGET_FADE_OUT_S,
+    () => token === widgetFadeToken, // shown again mid-fade: stay up
+    () => {
+      panel.orderOut(null);
+      panel.alphaValue = pref('opacity', 1);
+    }
+  );
 }
 
 function toggle() {
@@ -701,6 +769,9 @@ function makeRecorder() {
   v.addSubview(button('Cancel', 'recorderCancel:', $.NSMakeRect(W - 200, 12, 88, 32), false));
   v.addSubview(button('Save', 'recorderSave:', $.NSMakeRect(W - 104, 12, 88, 32), true));
   recorderWin = p;
+  // The red close button bypasses Cancel: route it through recorderClose too, or the key monitor
+  // stays installed and the shortcut stays unregistered.
+  $.NSNotificationCenter.defaultCenter.addObserverSelectorNameObject(controller, 'recorderWillClose:', 'NSWindowWillCloseNotification', p);
 }
 
 function recorderShowCandidate() {
@@ -715,32 +786,48 @@ function openRecorder() {
   recorderShowCandidate();
   if (TEST) return; // creation is what the self-test checks; a modal loop would block it
   if (recorderMonitor) $.NSEvent.removeMonitor(recorderMonitor);
+  // Pressing the current shortcut (to keep it, or by habit) would fire Quick Add instead of being
+  // recorded: the hot key is off while the recorder is up.
+  if (hotKeyRef && !recorderHeldHotKey) {
+    setHotKey(false);
+    recorderHeldHotKey = true;
+  }
   recorderMonitor = $.NSEvent.addLocalMonitorForEventsMatchingMaskHandler(1 << 10, (e) => {
-    if (!recorderWin || !e.window.isEqual(recorderWin)) return e;
-    const code = Number(e.keyCode);
-    const mods = carbonMods(Number(e.modifierFlags));
-    if (code === 53 && !mods) {
-      recorderClose();
-      return $();
-    }
-    if (code === 36 && !mods) {
-      recorderSave();
-      return $();
-    }
-    recorderCandidate = { code: code, mods: mods };
-    recorderShowCandidate();
-    return $(); // swallowed: the key was recorded, not typed
+    const out = guard('recorder key', () => {
+      if (!recorderWin || !e.window.isEqual(recorderWin)) return e;
+      const code = Number(e.keyCode);
+      const mods = carbonMods(Number(e.modifierFlags));
+      if (code === 53 && !mods) {
+        recorderClose();
+        return $();
+      }
+      if (code === 36 && !mods) {
+        recorderSave();
+        return $();
+      }
+      recorderCandidate = { code: code, mods: mods };
+      recorderShowCandidate();
+      return $(); // swallowed: the key was recorded, not typed
+    });
+    return out === undefined ? e : out; // it threw: let the key through rather than lose it
   });
-  activateApp();
+  activateForDialog(); // cleared by recorderClose
   recorderWin.center;
   frontModal(recorderWin);
 }
 
+/** Cancel, ⎋, the red button or a successful Save: monitor off, shortcut back, widget free to auto-show. */
 function recorderClose() {
   if (recorderMonitor) {
     $.NSEvent.removeMonitor(recorderMonitor);
     recorderMonitor = null;
   }
+  if (recorderHeldHotKey) {
+    recorderHeldHotKey = false;
+    if (!hotKeyRef) setHotKey(!!pref('hotkey', true)); // a Save has already registered the new one
+    pushDeskInfo();
+  }
+  suppressAutoShow = false;
   if (recorderWin && !TEST) recorderWin.orderOut(null);
 }
 
@@ -762,10 +849,12 @@ function recorderSave() {
     recorderClose();
     return;
   }
-  // Taken: back to the old one, the panel stays up with the reason.
+  // Taken: back to the old one, the panel stays up with the reason. While it is up the old one
+  // stays unregistered too (recorderClose re-registers it); outside the recorder it comes back now.
   defaults.setObjectForKey($(oldCode), 'hotKeyCode');
   defaults.setObjectForKey($(oldMods), 'hotKeyMods');
-  setHotKey(pref('hotkey', true));
+  if (recorderHeldHotKey) hotKeyFailed = false; // the refusal was the new combo's, not the old one's
+  else setHotKey(pref('hotkey', true));
   recorderMsg.stringValue = keyLabel(c.code, c.mods) + ' is used by another app. Try a different key.';
   pushDeskInfo();
 }
@@ -811,14 +900,15 @@ function makeFullWindow(link) {
 function openFullWindow(link) {
   if (!fullWin) {
     makeFullWindow(link);
-    pendingDeepLink = link || null; // the query does it on first load; re-sent by didFinish as a courtesy
+    pendingDeepLink = link || null; // the query does it on first load; re-sent on {ready:'full'} as a courtesy
   } else if (link) {
-    if (fullLoaded) evalIn(fullWeb, 'window.__nexusDeepLink&&window.__nexusDeepLink(' + JSON.stringify(link) + ')');
-    else pendingDeepLink = link;
+    if (fullReady) evalIn(fullWeb, 'window.__nexusDeepLink&&window.__nexusDeepLink(' + JSON.stringify(link) + ')');
+    else pendingDeepLink = link; // delivered by deskReady('full')
   }
   // A page hidden for hours is stale (tokens, day boundaries): reload it before showing.
   if (fullHiddenAt && Date.now() - fullHiddenAt > FULL_RELOAD_AFTER_MS) {
     fullLoaded = false;
+    fullReady = false;
     if (link) pendingDeepLink = link;
     fullWeb.reload;
   }
@@ -827,8 +917,8 @@ function openFullWindow(link) {
   applyActivationPolicyFor(true);
   // The full app replaces the floating widget while it is open; closing it brings the widget back.
   if (!TEST && isShown()) {
-    widgetHiddenForFull = true;
     hide();
+    widgetHiddenForFull = true; // after hide(), which clears it for a user's own hide
   }
   fullWin.makeKeyAndOrderFront(null); // visible before the activation notice, so becameActive: leaves the widget alone
   activateApp();
@@ -908,6 +998,8 @@ function makeQuickPanel() {
   p.contentView = fx;
   quickEffect = fx;
   quickLoaded = false;
+  quickReady = false;
+  quickPrefillLoad = false;
   quickFailed = false;
   quickWeb = makeWebView(fx.bounds, quickUrl(null), false);
   quickWeb.setValueForKey($(false), 'drawsBackground'); // the vibrancy shows through the page's transparent body
@@ -925,8 +1017,12 @@ function reduceMotion() {
   }
 }
 
-/** Opacity via NSAnimationContext; completion runs on the main thread (verified). */
-function fadeTo(win, alpha, seconds, done) {
+/**
+ * Opacity via NSAnimationContext; completion runs on the main thread (verified). stillWanted()
+ * is asked before the final alpha is pinned: a hide followed by a show within the fade's length
+ * must not have the stale fade-out snap the window to 0 after the show began.
+ */
+function fadeTo(win, alpha, seconds, stillWanted, done) {
   const d = reduceMotion() ? 0 : seconds;
   $.NSAnimationContext.runAnimationGroupCompletionHandler(
     (ctx) => {
@@ -940,6 +1036,7 @@ function fadeTo(win, alpha, seconds, done) {
     },
     () => {
       try {
+        if (!stillWanted()) return; // a newer show/hide owns the window now
         win.alphaValue = alpha; // in case the animator proxy wasn't reachable from JXA
         done();
       } catch (e) {
@@ -978,7 +1075,8 @@ function showQuickAdd(opts) {
   const prefill = !!(opts && (opts.text || opts.priority));
   if (prefill || quickFailed || (!quickLoaded && !quickWeb.isLoading)) {
     quickLoaded = false;
-    pendingQuickShow = true;
+    quickReady = false;
+    quickPrefillLoad = prefill; // the page must keep its ?text= instead of clearing for a fresh show
     quickWeb.loadRequest($.NSURLRequest.requestWithURL($.NSURL.URLWithString(quickUrl(opts))));
   }
   if (!quickPanel.isVisible) quickPanel.setFrameDisplay(quickFrame(quickPanel.frame.size.height), false);
@@ -988,8 +1086,31 @@ function showQuickAdd(opts) {
   if (quickFallback) quickPanel.makeFirstResponder(quickFallback.field);
   else quickPanel.makeFirstResponder(quickWeb);
   quickSpring();
-  fadeTo(quickPanel, QUICK_ALPHA, QUICK_SHOW_S, () => testLog('quickShowFadeDone', true));
-  if (quickLoaded) evalIn(quickWeb, 'window.__nexusQuickAddShown&&window.__nexusQuickAddShown()');
+  const token = ++quickFadeToken;
+  fadeTo(
+    quickPanel,
+    QUICK_ALPHA,
+    QUICK_SHOW_S,
+    () => token === quickFadeToken,
+    () => testLog('quickShowFadeDone', true)
+  );
+  // The hooks exist only once the page said {ready:'quickadd'}; until then deskReady runs the hook.
+  if (quickReady) evalIn(quickWeb, quickShownJs(false));
+  else pendingQuickShow = true;
+}
+
+/**
+ * The page's "shown" hook, with the clipboard's text read natively (the page must not read it:
+ * WebKit would put up its own Paste button). The page only offers it as a hint, never inserts it.
+ * keepPrefill: this page load carried ?text= / ?priority=, which a fresh show would otherwise wipe.
+ */
+function quickShownJs(keepPrefill) {
+  let text = '';
+  try {
+    const s = $.NSPasteboard.generalPasteboard.stringForType('public.utf8-plain-text');
+    if (!s.isNil()) text = s.js.slice(0, 500);
+  } catch (e) {}
+  return 'window.__nexusQuickAddShown&&window.__nexusQuickAddShown(' + JSON.stringify(text) + ',' + (keepPrefill ? 'true' : 'false') + ')';
 }
 
 /** Hides with a fade; the page has already played its exit (it posted {close}). */
@@ -997,12 +1118,18 @@ function hideQuickAdd() {
   if (!quickPanel || !quickPanel.isVisible || quickHiding) return;
   quickCancelHideTimer();
   quickHiding = true;
-  fadeTo(quickPanel, 0, QUICK_HIDE_S, () => {
-    if (!quickHiding) return; // a show started meanwhile: leave it up
-    quickHiding = false;
-    quickPanel.orderOut(null);
-    testLog('quickHideFadeDone', true);
-  });
+  const token = ++quickFadeToken;
+  fadeTo(
+    quickPanel,
+    0,
+    QUICK_HIDE_S,
+    () => quickHiding && token === quickFadeToken, // a show started meanwhile: leave it up
+    () => {
+      quickHiding = false;
+      quickPanel.orderOut(null);
+      testLog('quickHideFadeDone', true);
+    }
+  );
 }
 
 function quickCancelHideTimer() {
@@ -1015,7 +1142,7 @@ function quickCancelHideTimer() {
 /** The shortcut while the panel is up: ask the page to play its exit, hide anyway if it stays silent. */
 function toggleQuickAdd() {
   if (quickPanel && quickPanel.isVisible && !quickHiding) {
-    if (quickLoaded && !quickFallback) {
+    if (quickReady && !quickFallback) {
       evalIn(quickWeb, 'window.__nexusQuickAddHide&&window.__nexusQuickAddHide()');
       quickCancelHideTimer();
       quickHideTimer = $.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(QUICK_HIDE_TIMEOUT_S, controller, 'quickHideTimeout:', null, false);
@@ -1023,13 +1150,31 @@ function toggleQuickAdd() {
   } else showQuickAdd(null);
 }
 
-/** {resize:{height}}: the panel follows the page's content, keeping its top edge. */
+/**
+ * {resize:{height}}: the panel follows the page's content, keeping its top edge. This arrives
+ * inside a WKScriptMessageHandler callback, where setFrame:display:animate:YES runs its own
+ * blocking loop: the animation goes through NSAnimationContext (asynchronous) instead.
+ */
 function resizeQuickAdd(height) {
   if (!quickPanel) return;
   const h = Math.max(QUICK_H_MIN, Math.min(QUICK_H_MAX, Number(height) || QUICK_H_DEFAULT));
   const f = quickPanel.frame;
   if (Math.abs(f.size.height - h) < 1) return;
-  quickPanel.setFrameDisplayAnimate($.NSMakeRect(f.origin.x, f.origin.y + f.size.height - h, f.size.width, h), true, !reduceMotion() && quickPanel.isVisible);
+  const rect = $.NSMakeRect(f.origin.x, f.origin.y + f.size.height - h, f.size.width, h);
+  // The self-test reads the frame straight after: no animation there.
+  if (TEST || reduceMotion() || !quickPanel.isVisible) return quickPanel.setFrameDisplay(rect, true);
+  try {
+    $.NSAnimationContext.runAnimationGroupCompletionHandler(
+      (ctx) => {
+        ctx.duration = QUICK_RESIZE_S;
+        ctx.timingFunction = $.CAMediaTimingFunction.functionWithName('easeOut');
+        quickPanel.animator.setFrameDisplay(rect, true);
+      },
+      () => {}
+    );
+  } catch (e) {
+    quickPanel.setFrameDisplay(rect, true); // animator proxy unreachable from JXA: jump instead
+  }
 }
 
 // Fallback when the page can't load (offline, site down): a plain field + Add that hands the
@@ -1064,6 +1209,9 @@ function hideQuickFallback() {
   quickFallback.hint.removeFromSuperview;
   quickFallback = null;
   quickWeb.hidden = false;
+  // The removed field was the first responder: without this, typing after the page recovers
+  // goes nowhere until the panel is clicked.
+  if (quickPanel && quickPanel.isVisible) quickPanel.makeFirstResponder(quickWeb);
 }
 
 function quickFallbackAdd() {
@@ -1261,17 +1409,19 @@ function fetchIcs(message) {
   }
   const r = $.NSMutableURLRequest.requestWithURL(url);
   r.setValueForHTTPHeaderField($('text/calendar, text/plain;q=0.8'), $('Accept'));
-  const task = icsSession.dataTaskWithRequestCompletionHandler(r, (data, resp, err) => {
-    if (err && !err.isNil()) return reply(id, 0, '', '');
-    // Redirects are followed by the system; the final address must still be a calendar host.
-    if (!icsHostOk(resp.URL)) return reply(id, 502, '', 'redirected off host');
-    const status = Number(resp.statusCode);
-    if (status !== 200) return reply(id, status, '', 'calendar unreachable');
-    if (Number(data.length) > ICS_MAX_BYTES) return reply(id, 413, '', 'calendar too large');
-    const text = ObjC.unwrap($.NSString.alloc.initWithDataEncoding(data, 4)) || '';
-    if (!/BEGIN:VCALENDAR/i.test(text.slice(0, 2048))) return reply(id, 422, '', 'not a calendar');
-    reply(id, 200, text, '');
-  });
+  const task = icsSession.dataTaskWithRequestCompletionHandler(r, (data, resp, err) =>
+    guard('ics completion', () => {
+      if (err && !err.isNil()) return reply(id, 0, '', '');
+      // Redirects are followed by the system; the final address must still be a calendar host.
+      if (!icsHostOk(resp.URL)) return reply(id, 502, '', 'redirected off host');
+      const status = Number(resp.statusCode);
+      if (status !== 200) return reply(id, status, '', 'calendar unreachable');
+      if (Number(data.length) > ICS_MAX_BYTES) return reply(id, 413, '', 'calendar too large');
+      const text = ObjC.unwrap($.NSString.alloc.initWithDataEncoding(data, 4)) || '';
+      if (!/BEGIN:VCALENDAR/i.test(text.slice(0, 2048))) return reply(id, 422, '', 'not a calendar');
+      reply(id, 200, text, '');
+    })
+  );
   task.resume;
 }
 
@@ -1312,7 +1462,9 @@ function registerCategories(snoozeLabel) {
     $([]),
     0
   );
-  const meet = $.UNNotificationCategory.categoryWithIdentifierActionsIntentIdentifiersOptions(CAT_MEET, $([A('join', 'Join', FG), A('done', 'Done', 0)]), $([]), 0);
+  // Join only opens the meeting in the browser: not Foreground, or activating the Desk for it
+  // pops the widget up (becameActive:) on top of the call.
+  const meet = $.UNNotificationCategory.categoryWithIdentifierActionsIntentIdentifiersOptions(CAT_MEET, $([A('join', 'Join', 0), A('done', 'Done', 0)]), $([]), 0);
   c.setNotificationCategories($.NSSet.setWithArray($([task, meet])));
   return true;
 }
@@ -1334,15 +1486,23 @@ function deskNote(message) {
   content.body = $(String(n.body || '').slice(0, 600));
   content.threadIdentifier = $('nexus');
   if (!n.silent) content.sound = $.UNNotificationSound.defaultSound;
-  const kind = String(n.kind || 'task');
-  content.categoryIdentifier = $(n.category || (/meet/i.test(kind) ? CAT_MEET : CAT_TASK));
+  const kind = String(n.kind || '');
   const info = { kind: kind };
-  if (n.ref !== undefined && n.ref !== null) info.ref = String(n.ref);
+  if (n.ref !== undefined && n.ref !== null && n.ref !== '') info.ref = String(n.ref);
   if (n.url) info.url = String(n.url);
+  // Buttons only where they mean something: Done/Snooze/Open for one task, Join for a link.
+  // Grouped, overflow and check-in rings get none (the notification itself still opens Nexus).
+  const category = isTaskNote(kind, info.ref) ? CAT_TASK : info.url ? CAT_MEET : '';
+  if (category) content.categoryIdentifier = $(category);
   content.userInfo = $(info);
-  if (TEST) return testLog('deskNoteBuilt', { category: content.categoryIdentifier.js, info: info }); // never a real notification from a test
+  if (TEST) return testLog('deskNoteBuilt', { category: category, info: info }); // never a real notification from a test
   const req = $.UNNotificationRequest.requestWithIdentifierContentTrigger($(String(n.id || 'nexus').slice(0, 200)), content, $());
   c.addNotificationRequestWithCompletionHandler(req, () => {}); // a null block crashes JXA
+}
+
+/** A reminder for one task (it has a ref to open, mark done or snooze). */
+function isTaskNote(kind, ref) {
+  return TASK_NOTE_KINDS.indexOf(String(kind || '')) >= 0 && ref !== undefined && ref !== null && ref !== '';
 }
 
 /** A button under a notification (or the notification itself) was pressed. */
@@ -1352,7 +1512,14 @@ function noteResponse(action, info) {
   if (action === 'com.apple.UNNotificationDismissActionIdentifier') return payload;
   // The widget page owns reminders: it marks done, snoozes, or asks the Desk to open the link.
   evalIn(web, 'window.__nexusNoteAction&&window.__nexusNoteAction(' + JSON.stringify(payload) + ')');
-  if (payload.action === 'open' && !/meet/i.test(String(info.kind || ''))) openFullWindow(info.ref ? { task: info.ref } : null);
+  // Only a task reminder opens that task in the full window. A check-in's ref is not a task id
+  // ({task:'checkin'} would open a missing task): the widget page shows it. A meeting's link is
+  // opened by the page. Grouped/overflow rings open Nexus itself.
+  if (payload.action === 'open') {
+    const kind = String(info.kind || '');
+    if (isTaskNote(kind, info.ref)) openFullWindow({ task: info.ref });
+    else if (!info.url && !/meet|check/i.test(kind) && info.ref !== 'checkin') openFullWindow(null);
+  }
   return payload;
 }
 
@@ -1369,7 +1536,8 @@ ObjC.registerSubclass({
         try {
           const action = response.actionIdentifier.js;
           const info = ObjC.deepUnwrap(response.notification.request.content.userInfo) || {};
-          noteResponse(action, info);
+          // A tap that launched the Desk can arrive before launch() has built the widget.
+          whenLaunched('notification response', () => noteResponse(action, info));
         } catch (e) {
           logLine('notification response: ' + e);
         }
@@ -1447,9 +1615,34 @@ function applyDeskSetting(key, value) {
   return true;
 }
 
+/**
+ * {ready:'widget'|'quickadd'|'full'}: the page has installed its window.__nexus* hooks (on every
+ * load, reloads included). Anything that calls a hook waits for this, not for didFinishNavigation,
+ * which arrives before the page's scripts have run.
+ */
+function deskReady(kind) {
+  if (kind === 'quickadd') {
+    quickReady = true;
+    if (pendingQuickShow || (quickPanel && quickPanel.isVisible && !quickHiding)) evalIn(quickWeb, quickShownJs(quickPrefillLoad));
+    pendingQuickShow = false;
+    quickPrefillLoad = false; // only the load that carried the pre-fill keeps it
+    flushPendingQuickAdd(); // back online: whatever the fallback queued
+  } else if (kind === 'widget') {
+    flushPendingQuickAdd();
+  } else if (kind === 'full') {
+    fullReady = true;
+    if (pendingDeepLink && fullWeb) {
+      evalIn(fullWeb, 'window.__nexusDeepLink&&window.__nexusDeepLink(' + JSON.stringify(pendingDeepLink) + ')');
+      pendingDeepLink = null;
+    }
+  } else return false;
+  return true;
+}
+
 /** One nexusDesk message (a plain object); `view` is the web view it came from. Returns a trace for the self-test. */
 function handleDesk(m, view) {
   if (!m || typeof m !== 'object') return 'ignored';
+  if (m.ready) return deskReady(String(m.ready)) ? 'ready:' + m.ready : 'ready:unknown';
   if (m.open === 'full') {
     openFullWindow({ task: m.task, action: m.action, open: m.page, p: m.p });
     return 'open:full';
@@ -1549,23 +1742,44 @@ function viewKind(wv) {
   return '';
 }
 
+/** A new document was committed in a view: its old hooks are gone until the new page posts {ready}. */
+function pageCommitted(wv) {
+  const kind = viewKind(wv);
+  if (kind === 'full') fullReady = false;
+  else if (kind === 'quick') quickReady = false;
+}
+
+// The hooks don't exist yet at didFinish: the shown hook, the fallback queue and deep links wait
+// for the page's {ready} message (deskReady).
 function pageLoaded(wv) {
   const kind = viewKind(wv);
   testLog('loaded:' + kind, true);
-  if (kind === 'full') {
-    fullLoaded = true;
-    if (pendingDeepLink) {
-      evalIn(fullWeb, 'window.__nexusDeepLink&&window.__nexusDeepLink(' + JSON.stringify(pendingDeepLink) + ')');
-      pendingDeepLink = null;
-    }
-  } else if (kind === 'quick') {
+  if (kind === 'full') fullLoaded = true;
+  else if (kind === 'quick') {
     quickLoaded = true;
     quickFailed = false;
     hideQuickFallback();
-    if (pendingQuickShow || (quickPanel && quickPanel.isVisible)) evalIn(quickWeb, 'window.__nexusQuickAddShown&&window.__nexusQuickAddShown()');
-    pendingQuickShow = false;
   }
-  if (kind === 'widget') flushPendingQuickAdd();
+}
+
+/** WebKit's page process died (memory pressure, crash): the view is blank until reloaded. */
+function pageProcessEnded(wv) {
+  const kind = viewKind(wv);
+  if (!kind) return;
+  logLine('web content process ended (' + kind + '): reloading');
+  if (kind === 'quick') {
+    quickLoaded = false;
+    quickReady = false;
+    quickPrefillLoad = false; // a fresh page, not the old pre-fill again
+    if (quickPanel && quickPanel.isVisible) pendingQuickShow = true;
+    quickWeb.loadRequest($.NSURLRequest.requestWithURL($.NSURL.URLWithString(quickUrl(null))));
+    return;
+  }
+  if (kind === 'full') {
+    fullLoaded = false;
+    fullReady = false;
+  }
+  wv.reload;
 }
 
 function pageFailed(wv, error) {
@@ -1576,10 +1790,23 @@ function pageFailed(wv, error) {
   logLine('page failed (' + kind + '): ' + (error && !error.isNil() ? error.localizedDescription.js : '?'));
   if (kind === 'quick') {
     quickLoaded = false;
+    quickReady = false;
     quickFailed = true;
     pendingQuickShow = false;
     showQuickFallback();
   }
+}
+
+/** Runs fn now if launch() has finished, else once it has (openLocation, Services, notifications). */
+function whenLaunched(name, fn) {
+  if (launched) return guard(name, fn);
+  launchQueue.push({ name: name, fn: fn });
+  return undefined;
+}
+
+/** A menu/button action: one sender argument, never throws into AppKit. */
+function act(name, fn) {
+  return { types: ['void', ['id']], implementation: (sender) => guard(name, () => fn(sender)) };
 }
 
 function fullWillClose() {
@@ -1598,264 +1825,228 @@ ObjC.registerSubclass({
   methods: {
     // WKNavigationDelegate (private hook WebKit asks before touching the keychain).
     '_webCryptoMasterKeyForWebView:': { types: ['id', ['id']], implementation: () => webCryptoKey() },
-    'webView:didFinishNavigation:': { types: ['void', ['id', 'id']], implementation: (wv) => pageLoaded(wv) },
-    'webView:didFailProvisionalNavigation:withError:': { types: ['void', ['id', 'id', 'id']], implementation: (wv, nav, err) => pageFailed(wv, err) },
+    'webView:didCommitNavigation:': { types: ['void', ['id', 'id']], implementation: (wv) => guard('didCommit', () => pageCommitted(wv)) },
+    'webView:didFinishNavigation:': { types: ['void', ['id', 'id']], implementation: (wv) => guard('didFinish', () => pageLoaded(wv)) },
+    'webView:didFailProvisionalNavigation:withError:': {
+      types: ['void', ['id', 'id', 'id']],
+      implementation: (wv, nav, err) => guard('didFailProvisional', () => pageFailed(wv, err))
+    },
+    // A failure after the page started arriving (connection dropped mid-load); -999 is ignored in pageFailed.
+    'webView:didFailNavigation:withError:': {
+      types: ['void', ['id', 'id', 'id']],
+      implementation: (wv, nav, err) => guard('didFail', () => pageFailed(wv, err))
+    },
+    'webViewWebContentProcessDidTerminate:': { types: ['void', ['id']], implementation: (wv) => guard('processTerminated', () => pageProcessEnded(wv)) },
     'userContentController:didReceiveScriptMessage:': {
       types: ['void', ['id', 'id']],
-      implementation: (_ucc, message) => {
-        const name = message.name.js;
-        if (name === 'nexusNotify') deskNote(message);
-        else if (name === 'nexusDesk') deskMessage(message);
-        else fetchIcs(message);
-      }
+      implementation: (_ucc, message) =>
+        guard('script message', () => {
+          const name = message.name.js;
+          if (name === 'nexusNotify') deskNote(message);
+          else if (name === 'nexusDesk') deskMessage(message);
+          else fetchIcs(message);
+        })
     },
     'menuNeedsUpdate:': {
       types: ['void', ['id']],
-      implementation: function (menu) {
-        // Rebuilt on every open so ticks and titles are always current.
-        menu.removeAllItems;
-        const fresh = buildMenu();
-        const items = fresh.itemArray.js;
-        for (let i = 0; i < items.length; i++) {
-          fresh.removeItem(items[i]);
-          menu.addItem(items[i]);
-        }
-      }
+      implementation: (menu) =>
+        guard('menuNeedsUpdate', () => {
+          // Rebuilt on every open so ticks and titles are always current.
+          menu.removeAllItems;
+          const fresh = buildMenu();
+          const items = fresh.itemArray.js;
+          for (let i = 0; i < items.length; i++) {
+            fresh.removeItem(items[i]);
+            menu.addItem(items[i]);
+          }
+        })
     },
-    'toggle:': { types: ['void', ['id']], implementation: () => toggle() },
-    'newTask:': { types: ['void', ['id']], implementation: () => hotKeyPressed() },
-    'quickAdd:': { types: ['void', ['id']], implementation: () => quickAdd() },
-    'toggleNotify:': {
-      types: ['void', ['id']],
-      implementation: () => {
-        const on = !pref('notify', true);
-        setPref('notify', on);
-        if (on) askNotifyPermission();
-      }
-    },
-    'notifySettings:': {
-      types: ['void', ['id']],
-      implementation: () =>
-        $.NSWorkspace.sharedWorkspace.openURL($.NSURL.URLWithString('x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=' + AGENT_LABEL))
-    },
-    'toggleHotKey:': {
-      types: ['void', ['id']],
-      implementation: () => {
-        const on = !hotKeyRef;
-        setPref('hotkey', on);
-        setHotKey(on);
-        pushDeskInfo();
-      }
-    },
-    'changeShortcut:': { types: ['void', ['id']], implementation: () => openRecorder() },
-    'recorderSave:': { types: ['void', ['id']], implementation: () => recorderSave() },
-    'recorderCancel:': { types: ['void', ['id']], implementation: () => recorderClose() },
-    'setQuickStyle:': { types: ['void', ['id']], implementation: (sender) => setPref('quickAddStyle', QUICK_STYLES[sender.tag][0]) },
-    'quickHideTimeout:': {
-      types: ['void', ['id']],
-      implementation: () => {
-        quickHideTimer = null;
-        hideQuickAdd();
-      }
-    },
-    'quickResignedKey:': {
-      types: ['void', ['id']],
-      implementation: () => {
-        if (!TEST) hideQuickAdd();
-      }
-    },
-    'quickFallbackAdd:': { types: ['void', ['id']], implementation: () => quickFallbackAdd() },
-    'fullWillClose:': { types: ['void', ['id']], implementation: () => fullWillClose() },
-    // Clicking one of Nexus's notifications brings the app forward: show the window too.
-    'becameActive:': {
-      types: ['void', ['id']],
-      implementation: () => {
-        if (panel && !isShown() && !(fullWin && fullWin.isVisible) && !(quickPanel && quickPanel.isVisible)) show();
-      }
-    },
+    'toggle:': act('toggle', () => toggle()),
+    'newTask:': act('newTask', () => hotKeyPressed()),
+    'quickAdd:': act('quickAdd', () => quickAdd()),
+    'toggleNotify:': act('toggleNotify', () => {
+      const on = !pref('notify', true);
+      setPref('notify', on);
+      if (on) askNotifyPermission();
+    }),
+    'notifySettings:': act('notifySettings', () =>
+      $.NSWorkspace.sharedWorkspace.openURL($.NSURL.URLWithString('x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=' + AGENT_LABEL))
+    ),
+    'toggleHotKey:': act('toggleHotKey', () => {
+      const on = !hotKeyRef;
+      setPref('hotkey', on);
+      setHotKey(on);
+      pushDeskInfo();
+    }),
+    'changeShortcut:': act('changeShortcut', () => openRecorder()),
+    'recorderSave:': act('recorderSave', () => recorderSave()),
+    'recorderCancel:': act('recorderCancel', () => recorderClose()),
+    // The recorder's red close button (NSWindowWillCloseNotification).
+    'recorderWillClose:': act('recorderWillClose', () => recorderClose()),
+    'setQuickStyle:': act('setQuickStyle', (sender) => setPref('quickAddStyle', QUICK_STYLES[sender.tag][0])),
+    'quickHideTimeout:': act('quickHideTimeout', () => {
+      quickHideTimer = null;
+      hideQuickAdd();
+    }),
+    'quickResignedKey:': act('quickResignedKey', () => {
+      if (!TEST) hideQuickAdd();
+    }),
+    'quickFallbackAdd:': act('quickFallbackAdd', () => quickFallbackAdd()),
+    'fullWillClose:': act('fullWillClose', () => fullWillClose()),
+    // Clicking one of Nexus's notifications brings the app forward: show the window too. Not when
+    // the Desk activated itself for one of its own dialogs (suppressAutoShow).
+    'becameActive:': act('becameActive', () => {
+      if (suppressAutoShow) return;
+      if (panel && !isShown() && !(fullWin && fullWin.isVisible) && !(quickPanel && quickPanel.isVisible)) show();
+    }),
     // Back from sleep: the widget page syncs and re-arms its reminders.
-    'didWake:': {
-      types: ['void', ['id']],
-      implementation: () => allViews().forEach((v) => evalIn(v, 'window.__nexusWake&&window.__nexusWake()'))
-    },
-    // Services ▸ Add to Nexus (the selected text of any app).
+    'didWake:': act('didWake', () => allViews().forEach((v) => evalIn(v, 'window.__nexusWake&&window.__nexusWake()'))),
+    // Services ▸ Add to Nexus (the selected text of any app). The text is read now (the pasteboard
+    // is only valid during this call); showing it can wait for launch().
     'addToNexus:userData:error:': {
       types: ['void', ['id', 'id', '^@']],
-      implementation: (pboard, userData, error) => {
-        try {
+      implementation: (pboard, userData, error) =>
+        guard('service', () => {
           const s = pboard.stringForType('public.utf8-plain-text');
           const s2 = s.isNil() ? pboard.stringForType('NSStringPboardType') : s;
-          if (!s2.isNil()) addToNexusText(s2.js);
-        } catch (e) {
-          logLine('service: ' + e);
-        }
-      }
+          if (s2.isNil()) return;
+          const text = s2.js;
+          whenLaunched('service', () => addToNexusText(text));
+        })
     },
     // nexus:// links (Shortcuts.app, Raycast, Alfred, browsers).
     'handleGetURL:withReplyEvent:': {
       types: ['void', ['id', 'id']],
-      implementation: (event, reply) => {
-        try {
+      implementation: (event, reply) =>
+        guard('url', () => {
           const d = event.paramDescriptorForKeyword(0x2d2d2d2d); // keyDirectObject '----'
-          if (!d.isNil()) handleNexusUrl(d.stringValue.js);
-        } catch (e) {
-          logLine('url: ' + e);
-        }
-      }
+          if (d.isNil()) return;
+          const href = d.stringValue.js;
+          whenLaunched('url', () => handleNexusUrl(href));
+        })
     },
-    'openFull:': { types: ['void', ['id']], implementation: () => openFull() },
-    'setOpenIn:': {
-      types: ['void', ['id']],
-      implementation: (sender) => {
-        const t = targetList[sender.tag];
-        if (t) setPref('openIn', t.key);
+    'openFull:': act('openFull', () => openFull()),
+    'setOpenIn:': act('setOpenIn', (sender) => {
+      const t = targetList[sender.tag];
+      if (t) setPref('openIn', t.key);
+    }),
+    'reload:': act('reload', () => {
+      web.reload;
+      if (calWeb) calWeb.reload;
+      if (fullWeb) {
+        fullLoaded = false;
+        fullReady = false;
+        fullWeb.reload;
       }
-    },
-    'reload:': {
-      types: ['void', ['id']],
-      implementation: () => {
-        web.reload;
-        if (calWeb) calWeb.reload;
-        if (fullWeb) {
-          fullLoaded = false;
-          fullWeb.reload;
-        }
-        if (quickWeb) {
-          quickLoaded = false;
-          quickWeb.loadRequest($.NSURLRequest.requestWithURL($.NSURL.URLWithString(quickUrl(null))));
-        }
+      if (quickWeb) {
+        quickLoaded = false;
+        quickReady = false;
+        quickPrefillLoad = false;
+        quickWeb.loadRequest($.NSURLRequest.requestWithURL($.NSURL.URLWithString(quickUrl(null))));
       }
-    },
-    'setMode:': {
-      types: ['void', ['id']],
-      implementation: (sender) => {
-        setPref('mode', MODES[sender.tag][0]);
+    }),
+    'setMode:': act('setMode', (sender) => {
+      setPref('mode', MODES[sender.tag][0]);
+      applyMode();
+      show();
+    }),
+    'setSize:': act('setSize', (sender) => sizeBy(sender.tag)),
+    'setOpacity:': act('setOpacity', (sender) => {
+      setPref('opacity', OPACITY[sender.tag]);
+      applyMode();
+    }),
+    'toggleAutoHide:': act('toggleAutoHide', () => {
+      setPref('autoHide', !pref('autoHide', false));
+      applyMode();
+    }),
+    'setCorner:': act('setCorner', (sender) => {
+      setPref('corner', CORNERS[sender.tag][0]);
+      rebuildCorners();
+    }),
+    'setMainView:': act('setMainView', (sender) => {
+      setPref('mainView', MAIN_VIEWS[sender.tag][0]);
+      web.loadRequest($.NSURLRequest.requestWithURL($.NSURL.URLWithString(mainUrl())));
+      show();
+    }),
+    'toggleCalWindow:': act('toggleCalWindow', () => {
+      const on = !pref('calWindow', false);
+      setPref('calWindow', on);
+      if (on) {
+        makeCalendarWindow();
         applyMode();
-        show();
-      }
-    },
-    'setSize:': { types: ['void', ['id']], implementation: (sender) => sizeBy(sender.tag) },
-    'setOpacity:': {
-      types: ['void', ['id']],
-      implementation: (sender) => {
-        setPref('opacity', OPACITY[sender.tag]);
-        applyMode();
-      }
-    },
-    'toggleAutoHide:': {
-      types: ['void', ['id']],
-      implementation: () => {
-        setPref('autoHide', !pref('autoHide', false));
-        applyMode();
-      }
-    },
-    'setCorner:': {
-      types: ['void', ['id']],
-      implementation: (sender) => {
-        setPref('corner', CORNERS[sender.tag][0]);
-        rebuildCorners();
-      }
-    },
-    'setMainView:': {
-      types: ['void', ['id']],
-      implementation: (sender) => {
-        setPref('mainView', MAIN_VIEWS[sender.tag][0]);
-        web.loadRequest($.NSURLRequest.requestWithURL($.NSURL.URLWithString(mainUrl())));
-        show();
-      }
-    },
-    'toggleCalWindow:': {
-      types: ['void', ['id']],
-      implementation: () => {
-        const on = !pref('calWindow', false);
-        setPref('calWindow', on);
-        if (on) {
-          makeCalendarWindow();
-          applyMode();
-        } else closeCalendarWindow();
-        show();
-      }
-    },
+      } else closeCalendarWindow();
+      show();
+    }),
     // Hot corner tripwire: the pointer has to rest there a moment, so passing through doesn't count.
-    'mouseEntered:': {
-      types: ['void', ['id']],
-      implementation: () => {
-        if (dwellTimer) dwellTimer.invalidate;
-        dwellTimer = $.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(HOT_CORNER_DWELL_MS / 1000, controller, 'cornerFire:', null, false);
+    'mouseEntered:': act('mouseEntered', () => {
+      if (dwellTimer) dwellTimer.invalidate;
+      dwellTimer = $.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(HOT_CORNER_DWELL_MS / 1000, controller, 'cornerFire:', null, false);
+    }),
+    'mouseExited:': act('mouseExited', () => {
+      if (dwellTimer) dwellTimer.invalidate;
+      dwellTimer = null;
+    }),
+    'cornerFire:': act('cornerFire', () => {
+      dwellTimer = null;
+      toggle();
+    }),
+    'screensChanged:': act('screensChanged', () => rebuildCorners()),
+    'toggleLogin:': act('toggleLogin', () => setLogin(!loginEnabled())),
+    'uninstall:': act('uninstall', () => {
+      try {
+        uninstall();
+      } finally {
+        suppressAutoShow = false; // Cancel (or a failure): the widget may auto-show again
       }
-    },
-    'mouseExited:': {
-      types: ['void', ['id']],
-      implementation: () => {
-        if (dwellTimer) dwellTimer.invalidate;
-        dwellTimer = null;
-      }
-    },
-    'cornerFire:': {
-      types: ['void', ['id']],
-      implementation: () => {
-        dwellTimer = null;
-        toggle();
-      }
-    },
-    'screensChanged:': { types: ['void', ['id']], implementation: () => rebuildCorners() },
-    'toggleLogin:': { types: ['void', ['id']], implementation: () => setLogin(!loginEnabled()) },
-    'uninstall:': {
-      types: ['void', ['id']],
-      implementation: () => {
-        try {
-          uninstall();
-        } catch (e) {
-          logLine('uninstall failed: ' + e);
-        }
-      }
-    },
-    'quit:': { types: ['void', ['id']], implementation: () => $.NSApp.terminate(null) },
-    'testFinish:': { types: ['void', ['id']], implementation: () => testFinish() },
+    }),
+    'quit:': act('quit', () => $.NSApp.terminate(null)),
+    'testFinish:': act('testFinish', () => testFinish()),
     // window.open(): Google's sign-in gets its own small window; a Nexus link opens in the full
     // window; anything else opens in the user's browser (e.g. a meeting link).
     'webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:': {
       types: ['id', ['id', 'id', 'id', 'id']],
-      implementation: (wv, cfg, action, features) => {
-        const url = action.request.URL;
-        const href = url.isNil() ? '' : url.absoluteString.js;
-        const host = url.isNil() || url.host.isNil() ? '' : url.host.js;
-        if (href && href.indexOf(NEXUS_URL) === 0 && !/[?&]mode=/.test(href)) {
-          const q = {};
-          const comps = $.NSURLComponents.componentsWithURLResolvingAgainstBaseURL(url, false);
-          if (!comps.isNil() && !comps.queryItems.isNil()) comps.queryItems.js.forEach((it) => (q[it.name.js] = it.value.isNil() ? '' : it.value.js));
-          openFullWindow({ task: q.task, action: q.action, open: q.open, p: q.p });
-          return $();
-        }
-        if (href && !/(^|\.)google\.com$/.test(host)) {
-          openLink(url);
-          return $();
-        }
-        const win = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0, 0, 480, 640), 1 | 2 | 8, 2, false);
-        win.title = 'Sign in · Nexus';
-        win.releasedWhenClosed = false;
-        win.level = 3;
-        const pop = $.WKWebView.alloc.initWithFrameConfiguration(win.contentView.bounds, cfg);
-        pop.autoresizingMask = 2 | 16;
-        pop.customUserAgent = USER_AGENT;
-        pop.UIDelegate = controller;
-        win.contentView.addSubview(pop);
-        win.center;
-        win.makeKeyAndOrderFront(null);
-        popups.push({ win: win, view: pop });
-        return pop;
-      }
+      implementation: (wv, cfg, action, features) =>
+        guard('createWebView', () => {
+          const url = action.request.URL;
+          const href = url.isNil() ? '' : url.absoluteString.js;
+          const host = url.isNil() || url.host.isNil() ? '' : url.host.js;
+          if (href && href.indexOf(NEXUS_URL) === 0 && !/[?&]mode=/.test(href)) {
+            const q = {};
+            const comps = $.NSURLComponents.componentsWithURLResolvingAgainstBaseURL(url, false);
+            if (!comps.isNil() && !comps.queryItems.isNil()) comps.queryItems.js.forEach((it) => (q[it.name.js] = it.value.isNil() ? '' : it.value.js));
+            openFullWindow({ task: q.task, action: q.action, open: q.open, p: q.p });
+            return $();
+          }
+          if (href && !/(^|\.)google\.com$/.test(host)) {
+            openLink(url);
+            return $();
+          }
+          const win = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0, 0, 480, 640), 1 | 2 | 8, 2, false);
+          win.title = 'Sign in · Nexus';
+          win.releasedWhenClosed = false;
+          win.level = 3;
+          const pop = $.WKWebView.alloc.initWithFrameConfiguration(win.contentView.bounds, cfg);
+          pop.autoresizingMask = 2 | 16;
+          pop.customUserAgent = USER_AGENT;
+          pop.UIDelegate = controller;
+          win.contentView.addSubview(pop);
+          win.center;
+          win.makeKeyAndOrderFront(null);
+          popups.push({ win: win, view: pop });
+          return pop;
+        }) || $() // it threw: no window, rather than an exception inside WebKit
     },
     'webViewDidClose:': {
       types: ['void', ['id']],
-      implementation: (wv) => {
-        for (let i = popups.length - 1; i >= 0; i--) {
-          if (popups[i].view.isEqual(wv)) {
-            popups[i].win.orderOut(null);
-            popups.splice(i, 1);
+      implementation: (wv) =>
+        guard('webViewDidClose', () => {
+          for (let i = popups.length - 1; i >= 0; i--) {
+            if (popups[i].view.isEqual(wv)) {
+              popups[i].win.orderOut(null);
+              popups.splice(i, 1);
+            }
           }
-        }
-      }
+        })
     }
   }
 });
@@ -1978,8 +2169,9 @@ function runSelfTest() {
     ['openUrlBad', { openUrl: 'file:///etc/passwd' }],
     ['focus', { focus: 'widget' }],
     ['openFull', { open: 'full', task: 't1', page: 'calendar' }],
-    ['openQuick', { open: 'quickadd' }],
-    ['closeQuick', { close: 'quickadd', added: true }],
+    ['readyQuick', { ready: 'quickadd' }],
+    ['readyWidget', { ready: 'widget' }],
+    ['readyFull', { ready: 'full' }],
     ['junk', { hello: 1 }],
     ['notObject', 'x']
   ].forEach((t) => {
@@ -1988,6 +2180,20 @@ function runSelfTest() {
     } catch (e) {
       r.bridge[t[0]] = 'threw: ' + e;
     }
+  });
+  // Re-open and close Quick Add once the first fade-in has finished: sent at once, the close
+  // (correctly) supersedes that fade and its completion never reports.
+  $.NSTimer.scheduledTimerWithTimeIntervalRepeatsBlock(1, false, () => {
+    [
+      ['openQuick', { open: 'quickadd' }],
+      ['closeQuick', { close: 'quickadd', added: true }]
+    ].forEach((t) => {
+      try {
+        r.bridge[t[0]] = handleDesk(t[1], quickWeb);
+      } catch (e) {
+        r.bridge[t[0]] = 'threw: ' + e;
+      }
+    });
   });
   r.prefAfterSet = { quickAddStyle: pref('quickAddStyle', ''), mode: pref('mode', ''), corner: pref('corner', ''), hotkey: pref('hotkey', true), snoozeLabel: pref('snoozeLabel', '') };
   r.quickHeightMin = Number(quickPanel.frame.size.height);
@@ -2063,7 +2269,9 @@ function launch() {
   if (!TEST) setHotKey(pref('hotkey', true));
   // The hot key arrives as a "system defined" event (subtype 6 = pressed) on the main thread.
   $.NSEvent.addLocalMonitorForEventsMatchingMaskHandler(1 << 14, (e) => {
-    if (hotKeyRef && Number(e.subtype) === 6) hotKeyPressed();
+    guard('hotkey', () => {
+      if (hotKeyRef && Number(e.subtype) === 6) hotKeyPressed();
+    });
     return e;
   });
   const nc = $.NSNotificationCenter.defaultCenter;
@@ -2073,6 +2281,9 @@ function launch() {
   // Back from sleep: reminders re-arm, sync runs.
   $.NSWorkspace.sharedWorkspace.notificationCenter.addObserverSelectorNameObject(controller, 'didWake:', 'NSWorkspaceDidWakeNotification', $());
   pushDeskInfo();
+  // Links, Services and notification taps that arrived early run now, each on its own turn.
+  launched = true;
+  launchQueue.splice(0).forEach((q) => later(() => guard(q.name, q.fn)));
   if (TEST) runSelfTest();
 }
 
@@ -2100,10 +2311,12 @@ function reopen() {
   }
 }
 
-// nexus:// links when the applet shell answers the event before our handler.
+// nexus:// links when the applet shell answers the event before our handler (possibly before
+// run() has built anything: then the link waits for launch()).
 function openLocation(url) {
   try {
-    handleNexusUrl(url);
+    const href = String(url);
+    whenLaunched('openLocation', () => handleNexusUrl(href));
   } catch (e) {
     logLine('openLocation: ' + e);
   }

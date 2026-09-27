@@ -26,6 +26,8 @@ const UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
 interface RemoteImage {
   fileId: string;
   name: string;
+  /** Drive's createdTime (ms); 0 when unknown, which never counts as old enough to delete. */
+  createdAt: number;
 }
 
 async function driveFetch(token: string, url: string, init?: RequestInit): Promise<Response> {
@@ -36,6 +38,13 @@ async function driveFetch(token: string, url: string, init?: RequestInit): Promi
   if (!res.ok) throw new DriveError(res.status, await res.text());
   return res;
 }
+
+/**
+ * How long an unreferenced picture is kept before it is cleaned up, locally and on Drive. A picture
+ * pasted into a note that has not been saved yet (or saved on a device whose sync hasn't reached
+ * this one yet) is unreferenced for a while: deleting it straight away loses it for good.
+ */
+const UNREFERENCED_GRACE_MS = 24 * 60 * 60 * 1000;
 
 /** All `nexus_img_*` files in the app folder, by image id (oldest copy wins on duplicates). */
 async function listRemoteImages(token: string): Promise<Map<string, RemoteImage>> {
@@ -48,12 +57,12 @@ async function listRemoteImages(token: string): Promise<Map<string, RemoteImage>
     const page = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : '';
     const res = await driveFetch(
       token,
-      `${DRIVE}/files?spaces=appDataFolder&q=${q}&fields=nextPageToken,files(id,name)&orderBy=createdTime&pageSize=200${page}`
+      `${DRIVE}/files?spaces=appDataFolder&q=${q}&fields=nextPageToken,files(id,name,createdTime)&orderBy=createdTime&pageSize=200${page}`
     );
-    const list = (await res.json()) as { files?: { id: string; name: string }[]; nextPageToken?: string };
+    const list = (await res.json()) as { files?: { id: string; name: string; createdTime?: string }[]; nextPageToken?: string };
     for (const f of list.files ?? []) {
       const id = parseImageFileName(f.name);
-      if (id && !out.has(id)) out.set(id, { fileId: f.id, name: f.name });
+      if (id && !out.has(id)) out.set(id, { fileId: f.id, name: f.name, createdAt: f.createdTime ? Date.parse(f.createdTime) : 0 });
     }
     pageToken = list.nextPageToken;
   } while (pageToken);
@@ -69,7 +78,7 @@ async function findRemoteImage(token: string, id: string): Promise<RemoteImage |
     `${DRIVE}/files?spaces=appDataFolder&q=${q}&fields=files(id,name)&orderBy=createdTime`
   );
   const files = ((await res.json()) as { files?: { id: string; name: string }[] }).files ?? [];
-  return files.length ? { fileId: files[0].id, name: files[0].name } : null;
+  return files.length ? { fileId: files[0].id, name: files[0].name, createdAt: 0 } : null;
 }
 
 async function downloadBlob(token: string, fileId: string, mime: ImageMime): Promise<Blob> {
@@ -95,13 +104,16 @@ async function uploadImage(token: string, id: string, blob: Blob): Promise<strin
   return ((await res.json()) as { id: string }).id;
 }
 
-/** Image ids referenced by any task, tombstones included (they may be restored). */
+/**
+ * Image ids referenced by any task, tombstones included (they may be restored). Read from the raw
+ * notes text, so an IMAGE block an older app version saved back as TEXT "img:<id>" still counts.
+ */
 export function referencedImageIds(tasks: { notes: string }[]): Set<string> {
   const ids = new Set<string>();
   for (const t of tasks) {
     if (!t.notes || !t.notes.includes('img:')) continue;
     for (const b of fromStorage(t.notes)) {
-      const id = imageIdOf(b);
+      const id = imageIdOf(b) ?? (b.text.startsWith('img:') ? b.text.slice(4).trim() : null);
       if (id && isImageId(id)) ids.add(id);
     }
   }
@@ -123,9 +135,11 @@ export async function syncImages(token: string): Promise<void> {
   const local = await db.getAllImages();
   const remote = await listRemoteImages(token);
 
+  const now = Date.now();
   for (const rec of local) {
     if (!referenced.has(rec.id)) {
-      await db.deleteImage(rec.id).catch(() => {});
+      // Unsaved notes still point at it for a while: only clean up once it is old.
+      if (now - (rec.addedAt || 0) > UNREFERENCED_GRACE_MS) await db.deleteImage(rec.id).catch(() => {});
       continue;
     }
     if (remote.has(rec.id)) {
@@ -134,7 +148,7 @@ export async function syncImages(token: string): Promise<void> {
     }
     try {
       const fileId = await uploadImage(token, rec.id, rec.blob);
-      remote.set(rec.id, { fileId, name: imageFileName(rec.id, rec.blob.type === 'image/png' ? 'image/png' : 'image/jpeg') });
+      remote.set(rec.id, { fileId, name: imageFileName(rec.id, rec.blob.type === 'image/png' ? 'image/png' : 'image/jpeg'), createdAt: now });
       await db.markImageUploaded(rec.id);
     } catch (e) {
       if (e instanceof DriveError && (e.status === 401 || e.status === 403)) throw e;
@@ -144,6 +158,8 @@ export async function syncImages(token: string): Promise<void> {
 
   for (const [id, r] of remote) {
     if (referenced.has(id)) continue;
+    // Just uploaded by another device whose task hasn't reached this one yet: leave it alone.
+    if (!r.createdAt || now - r.createdAt < UNREFERENCED_GRACE_MS) continue;
     await deleteFile(token, r.fileId).catch(() => {});
   }
 }

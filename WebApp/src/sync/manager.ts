@@ -24,6 +24,7 @@ import { deleteFile, DriveError, findBackup, uploadBackup } from './drive';
 import { syncFeedCreds } from '../calendar/feed';
 import { syncLinkedCalendars } from '../calendar/linkedSync';
 import { syncLinkedSheets } from '../import/linkedSheetsSync';
+import { forgetAllLinkedSheets } from '../import/liveSheet';
 import { syncImages } from './images';
 import { countActiveRemovals, mergeTasks } from './merge';
 import { ensureDriveToken, signInWithDriveScope } from './sign-in-drive';
@@ -118,6 +119,18 @@ async function localUserTasks() {
   );
 }
 
+/**
+ * Removes this account's data from the device: tasks (tombstones too), cached pictures, and linked
+ * Google Sheets with their row snapshots, which would otherwise re-create the tasks on the next
+ * read. Linked calendars are the user's own settings and stay.
+ */
+async function wipeLocalData(): Promise<void> {
+  await db.wipeAllTasks();
+  await db.wipeAllImages();
+  await forgetAllLinkedSheets();
+  await reload();
+}
+
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
 /**
@@ -130,9 +143,13 @@ async function settleLocalData(email: string): Promise<boolean> {
   if (owner && owner.toLowerCase() === email.toLowerCase()) return true;
   const local = await localUserTasks();
   if (local.length === 0) {
-    await db.wipeAllTasks(); // only tombstones/demos from before: start clean
-    await db.wipeAllImages();
-    await reload();
+    // Only tombstones/demos from before: start clean. Sheets linked for another account go too.
+    if (owner) await wipeLocalData();
+    else {
+      await db.wipeAllTasks();
+      await db.wipeAllImages();
+      await reload();
+    }
     return true;
   }
   const n = plural(local.length, 'task');
@@ -172,9 +189,7 @@ async function settleLocalData(email: string): Promise<boolean> {
       if (!sure) return false;
       if (sure === 'merge') return true;
     }
-    await db.wipeAllTasks();
-    await db.wipeAllImages();
-    await reload();
+    await wipeLocalData();
   }
   return true;
 }
@@ -304,9 +319,7 @@ async function signOutFinish(choice: 'remove' | 'keep'): Promise<string> {
     dataOwnerEmail: choice === 'keep' ? owner : ''
   });
   if (choice === 'remove') {
-    await db.wipeAllTasks();
-    await db.wipeAllImages();
-    await reload(); // reminders re-publish from the (now empty) task list
+    await wipeLocalData(); // reminders re-publish from the (now empty) task list
     return 'Signed out · tasks removed from this device';
   }
   return 'Signed out · tasks kept on this device';
@@ -363,17 +376,33 @@ export async function runSync(options?: { background?: boolean }): Promise<SyncR
   return result;
 }
 
+const OFFLINE_MESSAGE = "You're offline — changes will sync when you're back";
+
+/**
+ * Why a background sync has no token: only a Drive grant that is really gone (revoked, no refresh
+ * token, or a token without Drive access) asks the user to reconnect. Offline, or Google/the relay
+ * not answering, is waited out: the next sync tries again.
+ */
+export function backgroundNoTokenResult(o: { online: boolean; hasRefreshToken: boolean; scopeMissing: boolean }): SyncResult {
+  if (!o.online) return { ok: false, message: OFFLINE_MESSAGE };
+  if (o.scopeMissing || !o.hasRefreshToken) return { ok: false, message: 'Tap to reconnect Google Drive', needsReconnect: true };
+  return { ok: false, message: "Couldn't reach Google Drive. Will try again shortly." };
+}
+
 async function syncOnce(background: boolean): Promise<SyncResult> {
   let token = await getAccessToken({ interactive: false });
+  let scopeMissing = false;
   if (token && !(await hasDriveAppDataAccess(token))) {
     clearToken();
     token = null;
+    scopeMissing = true;
   }
   if (!token) {
     if (background) {
-      return { ok: false, message: 'Tap to reconnect Google Drive', needsReconnect: true };
+      // A refresh that found the grant revoked has already dropped the refresh token.
+      return backgroundNoTokenResult({ online: navigator.onLine, hasRefreshToken: await hasRefreshToken(), scopeMissing });
     }
-    if (!navigator.onLine) return { ok: false, message: "You're offline — changes will sync when you're back" };
+    if (!navigator.onLine) return { ok: false, message: OFFLINE_MESSAGE };
     token = await ensureDriveToken();
     if (!token && (await hasRefreshToken())) {
       return { ok: false, message: "Couldn't reach Google Drive. Try again in a moment." };

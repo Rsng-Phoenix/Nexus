@@ -40,6 +40,8 @@
 .nx-mini-composer.idle:hover .plus { transform: rotate(90deg); }
 .nx-mini-composer.idle .lbl { flex: 1; text-align: left; }
 .nx-mini-composer.pick { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 8px; }
+/* Focused for aria-activedescendant; the highlighted cell already shows where the keys act. */
+.nx-mini-composer.pick:focus { outline: none; }
 .nx-mini-composer.pick .cell { position: relative; display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; column-gap: 8px; align-items: center; padding: 8px 9px; border-radius: 10px; text-align: left; background: color-mix(in srgb, var(--c) 7%, var(--nx-surfaceEl)); border: 1.5px solid color-mix(in srgb, var(--c) 18%, transparent); transition: border-color 140ms, background-color 140ms, transform 140ms var(--ease-bouncy); }
 .nx-mini-composer.pick .cell .glyph { grid-row: span 2; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 9px; font-weight: 800; color: var(--c); background: color-mix(in srgb, var(--c) 16%, transparent); }
 .nx-mini-composer.pick .cell .label { font-weight: 700; color: var(--c); font-size: 12.5px; }

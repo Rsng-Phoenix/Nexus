@@ -7,9 +7,9 @@ import { startSheetAutoRefresh } from './import/liveSheet';
 import { startClashRadar } from './calendar/radar';
 import { parsePairLink } from './pair/pair';
 import { loadFeedStatus, publishFeed, schedulePublishFeed } from './calendar/feed';
-import { initReminders } from './reminders/push';
+import { initReminders, scheduleAll } from './reminders/push';
 import { onAnnounce } from './state/broadcast';
-import { inNexusDesk } from './state/desk';
+import { deskPost, inNexusDesk } from './state/desk';
 import * as nav from './state/nav';
 import { allTasks, onTasksWritten, reload } from './state/store';
 import { finishRedirectSignIn, onSyncState, runSync, scheduleSync } from './sync/manager';
@@ -121,7 +121,8 @@ function bootWidget() {
     startClashRadar();
     // Nexus Desk for Mac rings reminders as macOS notifications (its main window only, so the
     // separate calendar window doesn't ring them twice).
-    if (inNexusDesk() && widgetView !== 'calendar') initReminders();
+    const ringsHere = inNexusDesk() && widgetView !== 'calendar';
+    if (ringsHere) initReminders();
     if (import.meta.env.DEV) void installDevHook();
     // Edits made in the widget reach "Show Nexus in your calendar apps" too.
     void loadFeedStatus();
@@ -136,7 +137,11 @@ function bootWidget() {
     window.setInterval(sync, 5 * 60_000);
     window.addEventListener('focus', () => scheduleSync(400));
     // The Desk says when the Mac wakes from sleep or its display comes back.
-    (window as Window & { __nexusWake?: () => void }).__nexusWake = () => scheduleSync(2000);
+    (window as Window & { __nexusWake?: () => void }).__nexusWake = () => {
+      scheduleSync(2000);
+      // Reminder timers slept with the Mac: re-arm them (only in the window that rings them).
+      if (ringsHere) void scheduleAll(500);
+    };
   });
 }
 
@@ -186,6 +191,7 @@ function bootApp() {
       for (const [k, v] of Object.entries(o ?? {})) if (v != null && v !== '') p.set(k, String(v));
       return handleOpenQuery(p);
     };
+    deskPost({ ready: 'full' });
     // Live calendar feed: resend a few seconds after the last change (only if the content changed).
     // Tasks ticked off from a notification while Nexus was closed: sent now (skipped if unchanged).
     void loadFeedStatus().then(() => publishFeed());

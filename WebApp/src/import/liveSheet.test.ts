@@ -10,7 +10,10 @@ vi.mock('../db/tasks', () => ({
   getAllTasksIncludingDeleted: async () => tasks.map((t) => ({ ...t })),
   getMeta: async (k: string) => meta.get(k) ?? '',
   setMeta: async (k: string, v: string) => void meta.set(k, v),
-  deleteMeta: async (k: string) => void meta.delete(k)
+  deleteMeta: async (k: string) => void meta.delete(k),
+  deleteMetaWithPrefix: async (p: string) => {
+    for (const k of [...meta.keys()]) if (k.startsWith(p)) meta.delete(k);
+  }
 }));
 vi.mock('../state/store', () => ({
   importTasks: async (rows: Array<Partial<Task> & { taskUuid: string }>) => {
@@ -46,7 +49,8 @@ vi.mock('../settings/store', () => ({
 const marks: string[] = [];
 vi.mock('./linkedSheetsSync', () => ({
   markSheetUpdated: async (r: { sheetId: string; gid: string }) => void marks.push(`+${r.sheetId}#${r.gid}`),
-  markSheetRemoved: async (r: { sheetId: string; gid: string }) => void marks.push(`-${r.sheetId}#${r.gid}`)
+  markSheetRemoved: async (r: { sheetId: string; gid: string }) => void marks.push(`-${r.sheetId}#${r.gid}`),
+  clearLinkedSheetsMeta: async () => void marks.push('clear')
 }));
 let pickerKey = true;
 vi.mock('./picker', () => ({ pickerAvailable: () => pickerKey }));
@@ -58,7 +62,7 @@ vi.mock('../sync/auth', () => ({
 }));
 
 import { csvRowsToCells } from './csv';
-import { applySheet, fetchSheetRows, lateAlerts, linkSheet, parseSheetUrl, SHEET_PICK_MESSAGE, SHEET_PRIVATE_MESSAGE, SheetError, sheetCsvUrl, unlinkSheet, upcomingSheetTasks } from './liveSheet';
+import { applySheet, fetchSheetRows, forgetAllLinkedSheets, refreshSheet, lateAlerts, linkSheet, parseSheetUrl, SHEET_PICK_MESSAGE, SHEET_PRIVATE_MESSAGE, SheetError, sheetCsvUrl, unlinkSheet, upcomingSheetTasks } from './liveSheet';
 
 const cells = (rows: string[][]) => csvRowsToCells(rows);
 const link = {
@@ -163,6 +167,38 @@ describe('links reach the other devices', () => {
   });
 });
 
+describe('this device forgets its linked sheets', () => {
+  it('removes the links, every row snapshot and the sync timestamps; other meta stays', async () => {
+    meta.clear();
+    marks.length = 0;
+    meta.set('sheet:L1', '{"rows":{},"at":1}');
+    meta.set('sheet:orphan', '{"rows":{},"at":1}');
+    meta.set('import_undone', '[]');
+    settings = { ...settings, linkedSheets: [{ ...link, name: 'RTO', enabled: true, lastSyncAt: 0, lastError: '' }] };
+    await forgetAllLinkedSheets();
+    expect(settings.linkedSheets).toEqual([]);
+    expect([...meta.keys()]).toEqual(['import_undone']);
+    expect(marks).toEqual(['clear']);
+  });
+
+  it('a sheet unlinked while it was being read writes nothing', async () => {
+    tasks = [];
+    meta.clear();
+    settings = { ...settings, linkedSheets: [{ ...link, name: 'RTO', enabled: true, lastSyncAt: 0, lastError: '' }] };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      settings = { ...settings, linkedSheets: [] }; // unlinked, or signed out with "Remove tasks"
+      return new Response('Task,Due\nA,2026-10-05', { headers: { 'content-type': 'text/csv' } });
+    });
+    try {
+      expect(await refreshSheet(link.id)).toBeNull();
+      expect(tasks).toEqual([]);
+      expect(meta.size).toBe(0);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+});
+
 describe('a linked sheet keeps its tasks up to date', () => {
   beforeEach(() => {
     tasks = [];
@@ -213,6 +249,21 @@ describe('a linked sheet keeps its tasks up to date', () => {
     } finally {
       now.mockRestore();
     }
+  });
+
+  it('a device without a row snapshot keeps Nexus edits to tasks that came with the Drive backup', async () => {
+    const v = cells([['Task', 'Due', 'Reason'], ['Call courier', '2026-10-05', 'Late'], ['New row', '2026-10-06', '']]);
+    // Linked on another device: its task arrived through Drive and was edited in Nexus since.
+    await applySheet(link, cells([['Task', 'Due', 'Reason'], ['Call courier', '2026-10-05', 'Late']]));
+    Object.assign(byTitle('Call courier')!, { priority: 'HIGH', notes: 'my notes', updatedAt: tick() });
+    meta.clear(); // this device never read the sheet
+    const edited = byTitle('Call courier')!.updatedAt;
+    expect(await applySheet(link, v)).toEqual({ added: 1, updated: 0, removed: 0 });
+    expect(byTitle('Call courier')).toMatchObject({ priority: 'HIGH', notes: 'my notes', updatedAt: edited });
+    // Its hash is recorded now: a later change in the sheet does update it.
+    const v2 = cells([['Task', 'Due', 'Reason'], ['Call courier', '2026-10-05', 'Late, called'], ['New row', '2026-10-06', '']]);
+    expect(await applySheet(link, v2)).toEqual({ added: 0, updated: 1, removed: 0 });
+    expect(byTitle('Call courier')!.notes).toBe('Reason: Late, called');
   });
 
   it('a task deleted in Nexus is not brought back while its row stays the same', async () => {

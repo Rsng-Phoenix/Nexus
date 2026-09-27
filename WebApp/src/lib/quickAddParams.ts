@@ -28,9 +28,13 @@ export function parsePriorityParam(v: string | null | undefined): Priority | nul
   return PRIORITY_NAMES[v.trim().toLowerCase()] ?? null;
 }
 
-/** `?from=` names the corner the panel appears from (the Desk's hot corner); anything else is the centre. */
+/** The Desk's short corner names (its `corner` setting). */
+const SHORT_CORNERS: Record<string, Corner> = { tl: 'top-left', tr: 'top-right', bl: 'bottom-left', br: 'bottom-right' };
+
+/** `?from=` names the corner the panel appears from (the Desk's hot corner: long or tl|tr|bl|br); anything else is the centre. */
 export function parseCorner(v: string | null | undefined): Corner {
   const s = (v ?? '').trim().toLowerCase().replace(/[_ ]/g, '-');
+  if (Object.prototype.hasOwnProperty.call(SHORT_CORNERS, s)) return SHORT_CORNERS[s];
   return s === 'top-left' || s === 'top-right' || s === 'bottom-left' || s === 'bottom-right' ? s : 'center';
 }
 

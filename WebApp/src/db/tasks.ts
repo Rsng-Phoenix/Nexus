@@ -22,11 +22,39 @@ export interface ImageRecord {
   uploaded: boolean;
 }
 
+export const DB_BLOCKED_MESSAGE = 'Nexus needs to update its storage. Close other Nexus windows or tabs, then reload this one.';
+
+/**
+ * One connection for the page, opened on first use. Another window upgrading the database (a newer
+ * Nexus) makes this one close its connection at once (onversionchange) so it never blocks the
+ * upgrade; the next call here simply reopens. When an old window still holds the database open,
+ * the upgrade waits: that is reported (onblocked) instead of hanging forever.
+ */
+let connection: Promise<IDBDatabase> | null = null;
+
 function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
+  connection ??= new Promise<IDBDatabase>((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onerror = () => reject(req.error);
-    req.onsuccess = () => resolve(req.result);
+    let blocked = false;
+    req.onblocked = () => {
+      blocked = true;
+      reject(new Error(DB_BLOCKED_MESSAGE));
+    };
+    req.onsuccess = () => {
+      const db = req.result;
+      // Opened after all, once the other window let go: this call already failed, so let go too.
+      if (blocked) return db.close();
+      const forget = () => {
+        if (connection === current) connection = null;
+      };
+      db.onversionchange = () => {
+        db.close();
+        forget();
+      };
+      db.onclose = forget; // closed by the browser (storage cleared, disk trouble)
+      resolve(db);
+    };
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE)) {
@@ -42,6 +70,12 @@ function openDb(): Promise<IDBDatabase> {
       }
     };
   });
+  const current = connection;
+  // A failed open is retried on the next call rather than cached.
+  current.catch(() => {
+    if (connection === current) connection = null;
+  });
+  return current;
 }
 
 export async function getImage(id: string): Promise<ImageRecord | undefined> {
@@ -348,6 +382,18 @@ export async function deleteMeta(key: string): Promise<void> {
     const req = db.transaction(META, 'readwrite').objectStore(META).delete(key);
     req.onsuccess = () => resolve();
     req.onerror = () => reject(req.error);
+  });
+}
+
+/** Deletes every meta entry whose key starts with [prefix] (e.g. all linked-sheet snapshots). */
+export async function deleteMetaWithPrefix(prefix: string): Promise<void> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const t = db.transaction(META, 'readwrite');
+    // Keys from prefix up to prefix + the highest code unit: exactly the keys that start with it.
+    t.objectStore(META).delete(IDBKeyRange.bound(prefix, `${prefix}\uffff`));
+    t.oncomplete = () => resolve();
+    t.onerror = () => reject(t.error);
   });
 }
 

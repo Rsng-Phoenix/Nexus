@@ -208,7 +208,9 @@ notify, login, mode, corner, fullWindow:true }`.
   Open full Nexus. Shown only while the full window exists (regular activation policy).
 - **Clipboard-aware Quick Add**: when the panel opens with an empty title and the pasteboard
   holds a short single line (< 120 chars, no newlines) that isn't already a task, it is offered
-  as a ghost placeholder "⌘V to use: …" (never auto-inserted).
+  as a ghost placeholder "⌘V to use: …" (never auto-inserted). The Desk reads the pasteboard
+  natively and passes the text to the page: calling `navigator.clipboard.readText()` in WebKit
+  puts up the system Paste button first.
 
 ### 2.7 Error handling (Desk)
 
@@ -261,8 +263,13 @@ and calls `reload()` (debounced 150 ms; ignores its own messages).
 └────────────────────────────────────────────────────────────┘
 ```
 
-- State: `priority` (last used, `localStorage nexus_qa_prio`), `title`, `ignored` smart chips,
-  notes via `renderNotesEditor` (DOM editor, reused), `due` override chips.
+- State: `priority` (every show starts fresh on High; `?priority=` only for the pre-filled load),
+  `title`, `ignored` smart chips, notes via `renderNotesEditor` (DOM editor, reused), `due` override
+  chips. The priority chooser opens inline under the title, inside the card.
+- Lifecycle: the page posts `{ready:'quickadd'}` once its hooks exist; the Desk then calls
+  `__nexusQuickAddShown(clipText, keepPrefill)`. `keepPrefill` is true only for the first show of a
+  `?text=`/`?priority=` load (Services, `nexus://add`); otherwise every show resets to a clean card.
+  The widget posts `{ready:'widget'}` and the full app `{ready:'full'}` the same way.
 - Keys: ⏎ add & close (`{close:'quickadd', added:true}`), ⇧⏎ add & keep open (title cleared,
   "Added ✓ · tomorrow" beat), ⌘1–4 / Alt+1–4 priority, ⌘⏎ save, Esc close (empty) or clear (non-empty,
   second Esc closes), ⌘⇧V paste plain, image paste → image block.

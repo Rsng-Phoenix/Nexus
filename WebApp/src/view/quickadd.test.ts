@@ -29,6 +29,15 @@ describe('Quick Add address parameters', () => {
     expect(parseCorner(undefined)).toBe('center');
     expect(parseQuickAddParams('?from=top-left').from).toBe('top-left');
   });
+  it("accepts the Desk's short corner names", () => {
+    expect(parseCorner('tl')).toBe('top-left');
+    expect(parseCorner('TR')).toBe('top-right');
+    expect(parseCorner(' bl ')).toBe('bottom-left');
+    expect(parseCorner('br')).toBe('bottom-right');
+    expect(parseCorner('tb')).toBe('center');
+    expect(parseCorner('constructor')).toBe('center');
+    expect(parseQuickAddParams('?from=br').from).toBe('bottom-right');
+  });
   it('gives each corner an entrance vector pointing inward', () => {
     expect(cornerVector('top-left')).toEqual({ fx: expect.any(Number), fy: expect.any(Number) });
     expect(cornerVector('top-left').fx).toBeLessThan(0);

@@ -14,7 +14,21 @@
 
 .nx-qa { width: 100%; max-width: 640px; display: flex; flex-direction: column; gap: 6px; padding: 12px 14px 10px; border-radius: 18px; background: var(--nx-surfaceEl); border: 1px solid var(--nx-stroke); box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.55); transform-origin: calc(50% + var(--fx, 0) * 50%) calc(50% + var(--fy, 0) * 50%); }
 /* Inside the Desk the card lets a little of the material through, like a native sheet. */
-.nx-qa.in-desk { background: color-mix(in srgb, var(--nx-surfaceEl) 88%, transparent); -webkit-backdrop-filter: blur(20px) saturate(1.2); backdrop-filter: blur(20px) saturate(1.2); }
+/* Inside the Desk the card IS the panel: edge to edge, the panel's vibrancy is its material and the
+   window's shadow its shadow. One surface, no slab around it. */
+.nx-in-desk .nx-qa-page { padding: 0; min-height: 0; }
+.nx-qa.in-desk { max-width: none; border: 0; border-radius: 18px; box-shadow: none; padding: 14px 16px 12px; background: color-mix(in srgb, var(--nx-surfaceEl) 40%, transparent); }
+
+/* Inline priority chooser (opens under the title, inside the card). */
+.nx-qa-prio-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-left: 30px; }
+.nx-qa-prio-row button { display: flex; align-items: center; gap: 7px; height: 32px; padding: 0 10px; border-radius: 10px; font-size: 12.5px; font-weight: 600; color: var(--nx-textSec); background: color-mix(in srgb, var(--c) 7%, transparent); border: 1.5px solid color-mix(in srgb, var(--c) 20%, transparent); animation: nx-qa-prio-in 260ms var(--qa-spring, var(--ease-bouncy)) backwards; animation-delay: calc(var(--i) * 30ms); transition: border-color 140ms, background-color 140ms, color 140ms, transform 160ms var(--ease-bouncy); }
+.nx-qa-prio-row button:hover { color: var(--nx-textPri); transform: translateY(-1px); }
+.nx-qa-prio-row button.on { color: var(--c); border-color: var(--c); background: color-mix(in srgb, var(--c) 16%, transparent); }
+.nx-qa-prio-row .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c); flex: none; }
+.nx-qa-prio-row kbd { margin-left: auto; font-size: 10px; opacity: 0.7; }
+@keyframes nx-qa-prio-in { from { opacity: 0; transform: translateY(-4px) scale(0.96); } }
+.nx-qa-head .nx-pri-pill svg { transition: transform 200ms var(--ease-bouncy); }
+.nx-qa-head .nx-pri-pill.open svg { transform: rotate(180deg); }
 
 .nx-qa-head { display: flex; align-items: flex-start; gap: 10px; }
 .nx-qa-head .mark { flex: none; display: grid; width: 20px; height: 20px; margin-top: 9px; animation: nx-qa-mark 600ms var(--qa-spring, var(--ease-bouncy)) both; }
@@ -22,7 +36,7 @@
 @keyframes nx-qa-mark { from { transform: rotate(-90deg) scale(0.5); opacity: 0; } }
 .nx-qa-title { flex: 1; min-width: 0; border: 0; background: transparent; resize: none; outline: none; font: inherit; font-size: 16px; font-weight: 500; line-height: 1.4; padding: 8px 0 6px; color: var(--nx-textPri); caret-color: var(--c); max-height: 40vh; }
 .nx-qa-title::placeholder { color: var(--nx-textTer); transition: color 200ms; }
-.nx-qa-head .nx-pri-pill { flex: none; margin-top: 4px; padding: 5px 8px 5px 12px; font-size: 12.5px; transition: background-color 200ms, border-color 200ms, color 200ms; }
+.nx-qa-head .nx-pri-pill { flex: none; margin-top: 4px; padding: 5px 8px 5px 12px; font-size: 12.5px; transition: transform var(--dur-snappy) var(--spring-snappy), background-color 200ms, border-color 200ms, color 200ms; }
 .nx-qa-send { flex: none; width: 34px; height: 34px; margin-top: 2px; border-radius: 50%; display: grid; place-items: center; color: #fff; background: var(--c); box-shadow: 0 4px 14px color-mix(in srgb, var(--c) 40%, transparent); transition: background-color 200ms, box-shadow 200ms, transform 160ms var(--ease-bouncy); }
 .nx-qa-send:hover { transform: translateY(-1px); }
 .nx-qa-send svg { transform: translateX(1px); }
@@ -37,7 +51,8 @@
 .nx-qa-notes { margin-left: 30px; padding: 6px 0 4px; border-top: 1px solid var(--nx-stroke); border-bottom: 1px solid var(--nx-stroke); cursor: text; }
 .nx-qa-notes-host { max-height: calc(6 * 1.45 * 14px + 6 * 6px); overflow-y: auto; font-size: 14px; }
 .nx-qa-notes-host .nx-note-line { font-size: 13.5px; padding: 2px 0; }
-.nx-qa-notes-host:empty::before, .nx-qa-notes-host .nx-note-text:empty:only-child::before { content: 'Notes…'; color: var(--nx-textTer); }
+/* The editor's own placeholder hook (ui/notes.ts sets data-ph on the empty first line); says "Notes…" here. */
+.nx-qa-notes-host .nx-note-edit[data-ph='1']:empty::before { content: 'Notes…'; color: var(--nx-textTer); pointer-events: none; }
 
 /* Footer: the four priority dots, due quick chips, key hints. */
 .nx-qa-foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-top: 2px; }
@@ -52,7 +67,6 @@
 .nx-qa-foot .grow { flex: 1; }
 .nx-qa-foot .hints { display: flex; gap: 10px; font-size: 11px; color: var(--nx-textTer); white-space: nowrap; }
 .nx-qa-foot .hints span { display: inline-flex; align-items: center; gap: 4px; }
-@container (max-width: 480px) { .nx-qa-foot .hints { display: none; } }
 @media (max-width: 480px) { .nx-qa-foot .hints { display: none; } }
 
 @media (prefers-reduced-motion: reduce) {

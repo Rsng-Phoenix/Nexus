@@ -4,8 +4,15 @@ import type { LinkedSheet, SheetMapping } from '../settings/store';
 // One Drive app folder shared by "devices"; each device has its own settings and meta.
 let driveFile: { id: string; text: string } | null = null;
 let writes = 0;
+/** Runs while the Drive file is being read (a link made on this device meanwhile). */
+let duringRead: (() => Promise<void>) | null = null;
 vi.mock('../sync/drive', () => ({
-  readAppFile: async () => driveFile,
+  readAppFile: async () => {
+    const hook = duringRead;
+    duringRead = null;
+    if (hook) await hook();
+    return driveFile;
+  },
   writeAppFile: async (_t: string, _n: string, text: string) => {
     writes++;
     driveFile = { id: 'f1', text };
@@ -23,10 +30,11 @@ let meta = new Map<string, unknown>();
 vi.mock('../settings/store', () => ({ getSettings: () => settings, patchSettings: (p: object) => void (settings = { ...settings, ...p }) }));
 vi.mock('../db/tasks', () => ({
   getMetaValue: async (k: string) => meta.get(k),
-  setMetaValue: async (k: string, v: unknown) => void meta.set(k, JSON.parse(JSON.stringify(v)))
+  setMetaValue: async (k: string, v: unknown) => void meta.set(k, JSON.parse(JSON.stringify(v))),
+  deleteMeta: async (k: string) => void meta.delete(k)
 }));
 
-import { localLinkedSheets, markSheetRemoved, markSheetUpdated, mergeLinkedSheets, parseLinkedSheetsFile, parseMapping, sheetKey, syncLinkedSheets, wireLinkedSheets, type SyncedSheet } from './linkedSheetsSync';
+import { clearLinkedSheetsMeta, localLinkedSheets, markSheetRemoved, markSheetsUpdated, markSheetUpdated, mergeLinkedSheets, parseLinkedSheetsFile, parseMapping, sheetKey, syncLinkedSheets, wireLinkedSheets, type SyncedSheet } from './linkedSheetsSync';
 
 const A = 'SHEET_A_ABCDEFGHIJKLMNOPQRSTUV';
 const B = 'SHEET_B_ABCDEFGHIJKLMNOPQRSTUV';
@@ -42,6 +50,8 @@ const sheet = (sheetId: string, updatedAt: number, extra: Partial<SyncedSheet> =
   ...extra
 });
 const NOW = Date.now();
+/** Also in Android's LinkedSheetsSyncTest: both apps must write exactly these bytes. */
+const CROSS_PLATFORM_FIXTURE = String.raw`{"v":1,"sheets":[{"id":"w2","name":"Zoho \"tracker\"","sheetId":"ZYXWVUTSRQPONMLKJIHGFEDC","gid":"12","mapping":{"headerRow":1,"titleCols":[0],"dateCol":2,"titleText":"","notesCols":[],"priority":"HIGH","offsets":[0],"alertTime":600,"dayFirst":false},"enabled":false,"updatedAt":1700000000002},{"id":"w1","name":"RTO / Returns","sheetId":"abcdefghijklmnopqrstuvwx","gid":"0","mapping":{"headerRow":0,"titleCols":[0],"dateCol":1,"titleText":"Order / AWB","notesCols":[2],"priority":{"col":3,"fallback":"LOW"},"offsets":[0,-1],"alertTime":540,"dayFirst":true},"enabled":true,"updatedAt":1700000000001}],"removed":[{"sheetId":"Mixed_Case-ID_abcdefghij","gid":"3","at":1700000000004},{"sheetId":"mixed_case-id_abcdefghij","gid":"3","at":1700000000003}]}`;
 const T = (n: number) => NOW - 1_000_000 + n; // recent moments, in order
 
 describe('mergeLinkedSheets', () => {
@@ -111,6 +121,21 @@ describe('the Drive file', () => {
     expect(back.removed).toEqual([{ sheetId: B, gid: '9', at: 3 }]);
     // Android writes the same text for the same set.
     expect(wireLinkedSheets(back)).toBe(text);
+  });
+
+  it('sorts by plain code-unit order and never escapes "/": the same bytes as Android (LinkedSheetsSyncTest)', () => {
+    const set = {
+      sheets: [
+        { id: 'w1', name: 'RTO / Returns', sheetId: 'abcdefghijklmnopqrstuvwx', gid: '0', mapping: { ...MAP, titleText: 'Order / AWB', priority: { col: 3, fallback: 'LOW' as const } }, enabled: true, updatedAt: 1700000000001 },
+        { id: 'w2', name: 'Zoho "tracker"', sheetId: 'ZYXWVUTSRQPONMLKJIHGFEDC', gid: '12', mapping: { ...MAP, headerRow: 1, dateCol: 2, notesCols: [], priority: 'HIGH' as const, offsets: [0], alertTime: 600, dayFirst: false }, enabled: false, updatedAt: 1700000000002 }
+      ],
+      removed: [
+        { sheetId: 'mixed_case-id_abcdefghij', gid: '3', at: 1700000000003 },
+        { sheetId: 'Mixed_Case-ID_abcdefghij', gid: '3', at: 1700000000004 }
+      ]
+    };
+    expect(wireLinkedSheets(set)).toBe(CROSS_PLATFORM_FIXTURE);
+    expect(wireLinkedSheets(parseLinkedSheetsFile(CROSS_PLATFORM_FIXTURE)!)).toBe(CROSS_PLATFORM_FIXTURE);
   });
 
   it('skips anything malformed instead of trusting it', () => {
@@ -220,6 +245,56 @@ describe('the same sheets on every device', () => {
     expect(mac.linkedSheets.map((l) => l.sheetId)).toEqual([A, B]);
     expect(mac.linkedSheets.map((l) => l.id)[0]).toBe('a'); // its own id and row snapshot kept
     expect(desk.linkedSheets.map((l) => l.id)).toEqual(['b', 'c']);
+  });
+
+  it('a sheet linked here while the sync was reading Drive is kept, and reaches Drive', async () => {
+    on(mac);
+    settings.linkedSheets = [link('a', A)];
+    await markSheetUpdated({ sheetId: A, gid: '0' }, T(10));
+    duringRead = async () => {
+      // What linkSheet does: settings first, then the timestamp.
+      settings = { linkedSheets: [...settings.linkedSheets, link('b', B)] };
+      await markSheetUpdated({ sheetId: B, gid: '0' }, T(20));
+    };
+    await syncLinkedSheets('t');
+    save(mac);
+    expect(mac.linkedSheets.map((l) => l.id)).toEqual(['a', 'b']);
+    expect(parseLinkedSheetsFile(driveFile!.text)!.sheets.map((s) => s.sheetId)).toEqual([A, B]);
+    expect((await localLinkedSheets(mac.linkedSheets)).sheets.map((s) => s.updatedAt)).toEqual([T(10), T(20)]);
+  });
+
+  it('a sheet unlinked here while the sync was reading Drive stays unlinked', async () => {
+    driveFile = { id: 'f1', text: wireLinkedSheets({ sheets: [sheet(A, T(10), { id: 'x' })], removed: [] }) };
+    on(mac);
+    settings.linkedSheets = [link('a', A)];
+    await markSheetUpdated({ sheetId: A, gid: '0' }, T(10));
+    duringRead = async () => {
+      settings = { linkedSheets: [] };
+      await markSheetRemoved({ sheetId: A, gid: '0' }, T(30));
+    };
+    await syncLinkedSheets('t');
+    save(mac);
+    expect(mac.linkedSheets).toEqual([]);
+    expect(parseLinkedSheetsFile(driveFile!.text)!).toMatchObject({ sheets: [], removed: [{ sheetId: A, gid: '0', at: T(30) }] });
+  });
+
+  it('sheets added by Scan to set up are stamped, so an older removal on Drive does not undo them', async () => {
+    driveFile = { id: 'f1', text: wireLinkedSheets({ sheets: [], removed: [{ sheetId: A, gid: '0', at: T(50) }] }) };
+    on(phone);
+    settings.linkedSheets = [link('scanned', A)];
+    await markSheetsUpdated([{ sheetId: A, gid: '0' }], T(60));
+    await syncLinkedSheets('t');
+    save(phone);
+    expect(phone.linkedSheets.map((l) => l.id)).toEqual(['scanned']);
+  });
+
+  it('clearing this device forgets its timestamps and removals', async () => {
+    on(mac);
+    await markSheetUpdated({ sheetId: A, gid: '0' }, T(10));
+    await markSheetRemoved({ sheetId: B, gid: '0' }, T(20));
+    await clearLinkedSheetsMeta();
+    expect(await localLinkedSheets([])).toEqual({ sheets: [], removed: [] });
+    expect(meta.size).toBe(0);
   });
 
   it('a link made here after another device removed it wins (re-linking on purpose)', async () => {

@@ -1,4 +1,5 @@
 import { refreshLinked } from '../calendar/linked';
+import { markSheetsUpdated } from '../import/linkedSheetsSync';
 import { refreshSheets } from '../import/liveSheet';
 import * as nav from '../state/nav';
 import { getSettings, patchSettings, type LinkedCalendar } from '../settings/store';
@@ -26,6 +27,10 @@ export function applySetup(p: SetupPayload, choice: ApplyChoice): number {
   });
   nav.closeKind('onboarding');
   if (added.length) void refreshLinked(true);
-  if (sheets.length) void refreshSheets(true);
+  if (sheets.length) {
+    // Stamped as linked now (like liveSheet.ts linkSheet), so an older removal on Drive doesn't win.
+    void markSheetsUpdated(sheets);
+    void refreshSheets(true);
+  }
   return added.length + sheets.length;
 }

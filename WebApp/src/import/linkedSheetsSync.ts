@@ -139,7 +139,13 @@ const wireMapping = (m: SheetMapping) => ({
   dayFirst: m.dayFirst
 });
 
-const byKey = (a: { sheetId: string; gid: string }, b: { sheetId: string; gid: string }) => sheetKey(a).localeCompare(sheetKey(b));
+// Plain code-unit order (not localeCompare, which depends on the browser's locale): Android sorts
+// the same way, so both write byte-identical files.
+const byKey = (a: { sheetId: string; gid: string }, b: { sheetId: string; gid: string }) => {
+  const x = sheetKey(a);
+  const y = sheetKey(b);
+  return x < y ? -1 : x > y ? 1 : 0;
+};
 
 export const wireLinkedSheets = (s: LinkedSheetSet) =>
   JSON.stringify({
@@ -168,20 +174,52 @@ async function loadMeta(): Promise<Meta> {
 }
 const saveMeta = (m: Meta) => db.setMetaValue(META_KEY, m).catch(() => {});
 
+/**
+ * Every read-modify-write of the meta runs one after another, so a link made while a sync is
+ * writing never loses its timestamp. [localVersion] counts local link changes: a sync that read
+ * this device's links before one of them re-reads (syncLinkedSheets).
+ */
+let metaQueue: Promise<unknown> = Promise.resolve();
+function locked<T>(fn: () => Promise<T>): Promise<T> {
+  const run = metaQueue.then(fn, fn);
+  metaQueue = run.catch(() => {});
+  return run;
+}
+let localVersion = 0;
+
+/** Sheets linked or changed on this device (liveSheet.ts linkSheet, Scan to set up). */
+export function markSheetsUpdated(refs: { sheetId: string; gid: string }[], at = Date.now()): Promise<void> {
+  localVersion++;
+  return locked(async () => {
+    const m = await loadMeta();
+    for (const ref of refs) {
+      m.updated[sheetKey(ref)] = at;
+      delete m.removed[sheetKey(ref)];
+    }
+    await saveMeta(m);
+  });
+}
+
 /** A sheet linked or changed on this device (liveSheet.ts linkSheet). */
-export async function markSheetUpdated(ref: { sheetId: string; gid: string }, at = Date.now()): Promise<void> {
-  const m = await loadMeta();
-  m.updated[sheetKey(ref)] = at;
-  delete m.removed[sheetKey(ref)];
-  await saveMeta(m);
+export function markSheetUpdated(ref: { sheetId: string; gid: string }, at = Date.now()): Promise<void> {
+  return markSheetsUpdated([ref], at);
 }
 
 /** A sheet unlinked on this device (liveSheet.ts unlinkSheet): the removal reaches the other devices. */
-export async function markSheetRemoved(ref: { sheetId: string; gid: string }, at = Date.now()): Promise<void> {
-  const m = await loadMeta();
-  delete m.updated[sheetKey(ref)];
-  m.removed[sheetKey(ref)] = at;
-  await saveMeta(m);
+export function markSheetRemoved(ref: { sheetId: string; gid: string }, at = Date.now()): Promise<void> {
+  localVersion++;
+  return locked(async () => {
+    const m = await loadMeta();
+    delete m.updated[sheetKey(ref)];
+    m.removed[sheetKey(ref)] = at;
+    await saveMeta(m);
+  });
+}
+
+/** This device's data removed (liveSheet.ts forgetAllLinkedSheets): no timestamps, no removals. */
+export function clearLinkedSheetsMeta(): Promise<void> {
+  localVersion++;
+  return locked(() => db.deleteMeta(META_KEY).catch(() => {}));
 }
 
 const parseKey = (k: string): { sheetId: string; gid: string } => {
@@ -191,12 +229,18 @@ const parseKey = (k: string): { sheetId: string; gid: string } => {
 
 /** This device's links and removals in the shared shape. */
 export async function localLinkedSheets(links: LinkedSheet[] = getSettings().linkedSheets): Promise<LinkedSheetSet> {
-  const meta = await loadMeta();
+  const meta = await locked(loadMeta); // after any link change still being written
   return {
     sheets: links.map((l) => ({ id: l.id, name: l.name, sheetId: l.sheetId, gid: l.gid, mapping: l.mapping, enabled: l.enabled, updatedAt: meta.updated[sheetKey(l)] ?? 0 })),
     removed: Object.entries(meta.removed).map(([k, at]) => ({ ...parseKey(k), at }))
   };
 }
+
+/** The same links, ignoring when each was last read. */
+const sameLinks = (a: LinkedSheet[], b: LinkedSheet[]) => {
+  const strip = (l: LinkedSheet[]) => JSON.stringify(l.map(({ id, name, sheetId, gid, mapping, enabled }) => [id, name, sheetId, gid, mapping, enabled]));
+  return a === b || strip(a) === strip(b);
+};
 
 /**
  * After each sync: bring in sheets linked, changed or unlinked on your other devices, and share this
@@ -204,15 +248,24 @@ export async function localLinkedSheets(links: LinkedSheet[] = getSettings().lin
  * straight away.
  */
 export async function syncLinkedSheets(token: string): Promise<void> {
-  const links = getSettings().linkedSheets;
-  const local = await localLinkedSheets(links);
   const file = await readAppFile(token, LINKED_SHEETS_FILE_NAME);
   const remote = file ? parseLinkedSheetsFile(file.text) : null;
+  // This device's links are read after Drive answered, and again if one was linked or unlinked
+  // meanwhile: the merge result replaces them wholesale, so it must include every local change.
+  let local: LinkedSheetSet;
+  let tries = 0;
+  do {
+    const v = localVersion;
+    const links = getSettings().linkedSheets;
+    local = await localLinkedSheets(links);
+    if (v === localVersion && sameLinks(links, getSettings().linkedSheets)) break;
+  } while (++tries < 5);
   if (!remote && !local.sheets.length && !local.removed.length) return;
   const merged = mergeLinkedSheets(local, remote);
 
   if (!sameSet(merged, local) || merged.sheets.some((s, i) => s.id !== local.sheets[i]?.id)) {
-    const before = new Map(links.map((l) => [l.id, l]));
+    // Read-status fields (lastSyncAt, lastError) from the settings as they are now.
+    const before = new Map(getSettings().linkedSheets.map((l) => [l.id, l]));
     const next: LinkedSheet[] = merged.sheets.map((s) => {
       const was = before.get(s.id);
       return { id: s.id, name: s.name, sheetId: s.sheetId, gid: s.gid, mapping: s.mapping, enabled: s.enabled, lastSyncAt: was?.lastSyncAt ?? 0, lastError: was?.lastError ?? '' };
@@ -222,7 +275,7 @@ export async function syncLinkedSheets(token: string): Promise<void> {
     const meta: Meta = { updated: {}, removed: {} };
     for (const s of merged.sheets) meta.updated[sheetKey(s)] = s.updatedAt;
     for (const r of merged.removed) meta.removed[sheetKey(r)] = r.at;
-    await saveMeta(meta);
+    await locked(() => saveMeta(meta));
     const after = new Set(next.map((l) => l.id));
     for (const [id] of before) if (!after.has(id)) await dropSheetSnapshot(id);
     for (const l of next) {

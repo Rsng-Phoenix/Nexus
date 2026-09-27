@@ -15,7 +15,6 @@ import { PRIORITIES, PRIORITY_META } from '../types';
 import { nexusLogoHtml } from '../ui/nexus-logo';
 import { renderNotesEditor } from '../ui/notes';
 import { Icon, type IconName } from './icons';
-import { Menu } from './kit';
 import { animate, BOUNCY, EXIT, STANDARD } from './motion';
 
 /**
@@ -25,25 +24,19 @@ import { animate, BOUNCY, EXIT, STANDARD } from './motion';
  * panel around it (docs/premium-desk-architecture.md §4.2); in a browser tab closing goes home.
  */
 
-/** Last priority used here (remembered across panel shows and launches). */
-const PRIO_KEY = 'nexus_qa_prio';
+/** Every show starts fresh on this priority (a "!2" in the text or ⌘1–4 changes it). */
+const DEFAULT_PRIORITY: Priority = 'HIGH';
 /** How long "Added" stays under the field after ⇧⏎ (a beat, not a toast). */
 const ADDED_MS = 1600;
 /** A second Esc within this window closes a non-empty card after the first one cleared it. */
 const ESC_ARM_MS = 1500;
 /** Clipboard offers (§2.6): only a short single line is suggested, never inserted. */
 const GHOST_MAX_LEN = 120;
-/** Panel frame the Desk is asked for: card height plus the page margin around it (see quickadd.css). */
-const PANEL = { min: 132, margin: 14 };
-
-const readPrio = (): Priority => {
-  try {
-    const v = localStorage.getItem(PRIO_KEY);
-    return PRIORITIES.includes(v as Priority) ? (v as Priority) : 'HIGH';
-  } catch {
-    return 'HIGH';
-  }
-};
+/**
+ * Panel frame the Desk is asked for. Inside the Desk the card IS the panel (no margin: one surface,
+ * the vibrancy behind it); in a browser tab the page keeps a margin around the card.
+ */
+const PANEL = { min: 96, margin: 14 };
 
 const timeLabel = (ms: number, now = Date.now()) => {
   const d = new Date(ms);
@@ -88,7 +81,9 @@ export async function addSmartTasks(lines: string[], fallback: Priority, notes =
 
 export function QuickAddWindow() {
   const params = useMemo(() => parseQuickAddParams(location.search), []);
-  const [priority, setPriorityState] = useState<Priority>(() => params.priority ?? readPrio());
+  const [priority, setPriority] = useState<Priority>(() => params.priority ?? DEFAULT_PRIORITY);
+  // The inline priority chooser under the title (a dropdown would hang outside the panel).
+  const [prioOpen, setPrioOpen] = useState(false);
   const [title, setTitle] = useState(params.text);
   const [ignored, setIgnored] = useState<SmartKind[]>([]);
   const [due, setDue] = useState('');
@@ -105,15 +100,17 @@ export function QuickAddWindow() {
   const editor = useRef<ReturnType<typeof renderNotesEditor> | null>(null);
   const escArmed = useRef(0);
   const closing = useRef(false);
-
-  const setPriority = (p: Priority) => {
-    setPriorityState(p);
-    try {
-      localStorage.setItem(PRIO_KEY, p);
-    } catch {
-      /* ignore */
-    }
-  };
+  // Bumped by every close and every show: an exit that finishes after the panel was shown again
+  // (within the exit beat) must not post its stale {close}.
+  const closeGen = useRef(0);
+  const exitAnim = useRef<Animation | null>(null);
+  // `ready` goes to the Desk once, the first time the hooks are in place.
+  const announced = useRef(false);
+  // Clipboard text handed over by the Desk natively on each show: reading it from the page would
+  // make macOS put up its own "Paste" button first.
+  const clip = useRef<string | undefined>(undefined);
+  // A click that started on the see-through background (not a menu or row that vanished under it).
+  const downOnBackdrop = useRef(false);
 
   // Live reading of the title (lib/smartAdd.ts). Pasted multi-line text is read line by line on save.
   const smart = useMemo(() => (title.includes('\n') ? null : parseSmartAdd(title, Date.now(), ignored)), [title, ignored]);
@@ -143,6 +140,14 @@ export function QuickAddWindow() {
     if (titleRef.current) titleRef.current.style.height = '';
   };
 
+  /** The title grows with its lines (typed, pasted or pre-filled). */
+  const fitTitle = () => {
+    const el = titleRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  };
+
   const focusTitle = () => {
     const el = titleRef.current;
     if (!el) return;
@@ -159,24 +164,15 @@ export function QuickAddWindow() {
     const r = el.getBoundingClientRect();
     el.style.setProperty('--fx', String(fx));
     el.style.setProperty('--fy', String(fy));
+    if (titleRef.current?.value) fitTitle();
     animate(el, [{ opacity: 0, transform: `translate(${fx * r.width}px, ${fy * r.height}px) scale(0.94)` }, { opacity: 1, transform: 'none' }], { duration: 360, easing: BOUNCY });
     el.querySelectorAll<HTMLElement>('[data-stagger]').forEach((row, i) => {
       animate(row, [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 300, delay: 60 + i * 40, easing: STANDARD });
     });
     focusTitle();
-    // Clipboard ghost (§2.6): offered as the placeholder, never inserted. readText needs a
-    // gesture in most engines; then it simply stays quiet.
-    setGhost(null);
-    if (!titleRef.current?.value) {
-      void (async () => {
-        try {
-          const clip = await navigator.clipboard?.readText?.();
-          setGhost(clipboardHint(clip, activeTasks.value.map((t) => t.description), GHOST_MAX_LEN));
-        } catch {
-          /* no clipboard access */
-        }
-      })();
-    }
+    // Clipboard ghost (§2.6): offered as the placeholder, never inserted, and only with text the
+    // Desk passed in (never navigator.clipboard, which brings up the system Paste prompt).
+    setGhost(titleRef.current?.value ? null : clipboardHint(clip.current, activeTasks.value.map((t) => t.description), GHOST_MAX_LEN));
   }, [shown]);
 
   // The panel's height follows the card (Desk animates its frame; a Windows app window resizes itself, best effort).
@@ -184,9 +180,11 @@ export function QuickAddWindow() {
     const el = card.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
     let last = 0;
-    const ro = new ResizeObserver(() => {
+    const ro = new ResizeObserver((entries) => {
       const max = Math.max(PANEL.min, Math.round((window.screen?.availHeight || 800) * 0.8));
-      const h = clampPanelHeight(el.getBoundingClientRect().height, { min: PANEL.min, max, margin: PANEL.margin });
+      // Layout size, not getBoundingClientRect(): that one is scaled by the entrance's scale(0.94).
+      const box = entries[entries.length - 1]?.borderBoxSize?.[0]?.blockSize ?? el.offsetHeight;
+      const h = clampPanelHeight(box, { min: PANEL.min, max, margin: inNexusDesk() ? 0 : PANEL.margin });
       if (h === last) return;
       last = h;
       if (!deskPost({ resize: { height: h } }) && deskInfo.value?.platform === 'windows') {
@@ -205,14 +203,17 @@ export function QuickAddWindow() {
   const close = (didAdd: boolean) => {
     if (closing.current) return;
     closing.current = true;
+    const gen = ++closeGen.current;
     const el = card.current;
     const { fx, fy } = cornerVector(params.from);
     const r = el?.getBoundingClientRect();
     const a = animate(el, [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: `translate(${fx * (r?.width ?? 0) * 0.5}px, ${fy * (r?.height ?? 0) * 0.5}px) scale(0.96)` }], EXIT);
+    exitAnim.current = a;
     let posted = false;
     const done = () => {
       // Once only: an occluded web view may never finish its animation, so a timer backs it up.
-      if (posted) return;
+      // Shown again meanwhile (a newer generation): this close is void.
+      if (posted || gen !== closeGen.current) return;
       posted = true;
       if (deskPost({ close: 'quickadd', added: didAdd || undefined })) return;
       // Not in the Desk: an app window (Windows) may close itself; a tab goes back to Nexus.
@@ -275,6 +276,7 @@ export function QuickAddWindow() {
 
   const pick = (p: Priority) => {
     setPriority(p);
+    setPrioOpen(false);
     // Choosing explicitly wins over a "!1" in the text.
     if (smart?.priority && smart.priority !== p) setIgnored((x) => [...x, 'priority']);
     haptic('DRAG_TICK');
@@ -284,7 +286,8 @@ export function QuickAddWindow() {
   // Window-wide keys: ⌘/Alt+1–4 priority, ⌘⏎ save, Esc. The Desk's hooks live here too.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.repeat) return;
+      // Enter / Esc while an IME is composing belong to the IME.
+      if (e.repeat || e.isComposing || e.keyCode === 229) return;
       if ((e.metaKey || e.altKey || e.ctrlKey) && /^[1-4]$/.test(e.key)) {
         e.preventDefault();
         pick(PRIORITIES[Number(e.key) - 1]);
@@ -293,16 +296,39 @@ export function QuickAddWindow() {
         save(true);
       } else if (e.key === 'Escape') {
         e.preventDefault();
-        escape();
+        if (prioOpen) {
+          setPrioOpen(false);
+          focusTitle();
+        } else escape();
       }
     };
     window.addEventListener('keydown', onKey);
-    const w = window as Window & { __nexusQuickAddShown?: () => void; __nexusQuickAddHide?: () => void };
-    w.__nexusQuickAddShown = () => {
-      resetAll();
+    const w = window as Window & { __nexusQuickAddShown?: (clipText?: string, keepPrefill?: boolean) => void; __nexusQuickAddHide?: () => void };
+    // Each show starts clean: no text, default priority, nothing left open from last time.
+    // [keepPrefill]: the page was just opened with ?text= / ?priority= (Services, nexus://add):
+    // keep what they filled in and only replay the entrance.
+    w.__nexusQuickAddShown = (clipText?: string, keepPrefill?: boolean) => {
+      clip.current = typeof clipText === 'string' ? clipText : undefined;
+      closeGen.current++;
+      closing.current = false;
+      exitAnim.current?.cancel();
+      exitAnim.current = null;
+      if (keepPrefill) setAdded(null);
+      else {
+        resetAll();
+        // Not the address's ?priority=: the Desk keeps this page between shows, so a pre-filled
+        // load's priority would otherwise stick to every later Quick Add.
+        setPriority(DEFAULT_PRIORITY);
+      }
+      setPrioOpen(false);
+      escArmed.current = 0;
       setShown((n) => n + 1);
     };
     w.__nexusQuickAddHide = () => close(false);
+    if (!announced.current) {
+      announced.current = true;
+      deskPost({ ready: 'quickadd' });
+    }
     return () => {
       window.removeEventListener('keydown', onKey);
       delete w.__nexusQuickAddShown;
@@ -317,56 +343,76 @@ export function QuickAddWindow() {
   };
   // A time that has already passed on an explicit day is left in the title: no chip for it.
   const chips = (smart?.chips ?? []).filter((c) => (c.kind === 'date' ? !!smart?.dueDate : c.kind === 'time' ? smart?.reminderTime != null : !!smart?.priority));
-  const menuOrder = [...PRIORITIES.filter((p) => p !== effective), effective];
-  const mod = deskInfo.value?.platform === 'windows' || /Windows/.test(navigator.userAgent) ? 'Alt' : '⌘';
+  const onWindows = deskInfo.value?.platform === 'windows' || /Windows/.test(navigator.userAgent);
+  const mod = onWindows ? 'Alt' : '⌘';
+  // Paste is Ctrl+V on Windows (Alt is only the priority modifier there).
+  const pasteKey = onWindows ? 'Ctrl+V' : '⌘V';
   const today = todayIso();
 
   return (
-    <div class="nx-qa-page" onClick={(e) => e.target === e.currentTarget && inNexusDesk() && close(false)}>
+    <div
+      class="nx-qa-page"
+      onPointerDown={(e) => (downOnBackdrop.current = e.target === e.currentTarget)}
+      onClick={(e) => e.target === e.currentTarget && downOnBackdrop.current && inNexusDesk() && close(false)}
+    >
       <div ref={card} class={`nx-qa ${inNexusDesk() ? 'in-desk' : ''}`} role="dialog" aria-label="Quick add" style={{ '--c': meta.color } as JSX.CSSProperties}>
         <div class="nx-qa-head" data-stagger>
           <span class="mark" aria-hidden="true" dangerouslySetInnerHTML={{ __html: nexusLogoHtml(20) }} />
           <textarea
             ref={titleRef}
             class="nx-qa-title"
-            placeholder={ghost ? `${mod}V to use: ${ghost}` : 'What needs to be done?'}
+            placeholder={ghost ? `${pasteKey} to use: ${ghost}` : 'What needs to be done?'}
             aria-label="New task"
             rows={1}
             value={title}
             onInput={(e) => {
+              // Pastes land here too (natively, at the selection); several lines become several tasks.
               const el = e.currentTarget;
               setTitle(el.value);
               if (el.value) setGhost(null);
-              el.style.height = 'auto';
-              el.style.height = `${el.scrollHeight}px`;
+              fitTitle();
             }}
             onKeyDown={(e) => {
-              if (e.key !== 'Enter' || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
+              if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229 || e.metaKey || e.ctrlKey || e.altKey) return;
               e.preventDefault();
               save(!e.shiftKey);
             }}
-            onPaste={(e) => {
-              const text = e.clipboardData?.getData('text') ?? '';
-              if (text.includes('\n')) {
-                e.preventDefault();
-                setTitle((t) => (t ? `${t}\n${text}` : text));
-              }
-            }}
           />
-          <Menu
-            align="end"
-            trigger={(toggle) => (
-              <button class="nx-pri-pill press" title={`Priority (${mod}1–4)`} onClick={toggle}>
-                {meta.label}
-                <Icon name="expandMore" size={16} />
-              </button>
-            )}
-            items={menuOrder.map((p) => ({ label: PRIORITY_META[p].label, onSelect: () => pick(p) }))}
-          />
+          <button
+            class={`nx-pri-pill press ${prioOpen ? 'open' : ''}`}
+            title={`Priority (${mod}1–4)`}
+            aria-expanded={prioOpen}
+            onClick={() => setPrioOpen((o) => !o)}
+          >
+            {meta.label}
+            <Icon name="expandMore" size={16} />
+          </button>
           <button class="nx-qa-send press" aria-label="Add task (Enter)" title="Add (⏎)" onClick={() => save(true)}>
             <Icon name="send" size={18} />
           </button>
         </div>
+        {prioOpen && (
+          <div class="nx-qa-prio-row" role="radiogroup" aria-label="Priority">
+            {PRIORITIES.map((p, i) => (
+              <button
+                key={p}
+                type="button"
+                role="radio"
+                aria-checked={effective === p}
+                class={effective === p ? 'on' : ''}
+                style={{ '--c': PRIORITY_META[p].color, '--i': i } as JSX.CSSProperties}
+                onClick={() => pick(p)}
+              >
+                <span class="dot" />
+                {PRIORITY_META[p].label}
+                <kbd>
+                  {mod}
+                  {i + 1}
+                </kbd>
+              </button>
+            ))}
+          </div>
+        )}
         <div class={`nx-qa-under ${added ? 'added' : ''}`} aria-live="polite" data-stagger>
           {added ? (
             <span class="beat"><Icon name="check" size={12} /> {added}</span>
