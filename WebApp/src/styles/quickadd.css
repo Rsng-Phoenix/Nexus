@@ -24,6 +24,7 @@
 .nx-qa-prio-row button { display: flex; align-items: center; gap: 7px; height: 32px; padding: 0 10px; border-radius: 10px; font-size: 12.5px; font-weight: 600; color: var(--nx-textSec); background: color-mix(in srgb, var(--c) 7%, transparent); border: 1.5px solid color-mix(in srgb, var(--c) 20%, transparent); animation: nx-qa-prio-in 260ms var(--qa-spring, var(--ease-bouncy)) backwards; animation-delay: calc(var(--i) * 30ms); transition: border-color 140ms, background-color 140ms, color 140ms, transform 160ms var(--ease-bouncy); }
 .nx-qa-prio-row button:hover { color: var(--nx-textPri); transform: translateY(-1px); }
 .nx-qa-prio-row button.on { color: var(--c); border-color: var(--c); background: color-mix(in srgb, var(--c) 16%, transparent); }
+.nx-qa-prio-row button.sel { box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 45%, transparent); color: var(--nx-textPri); }
 .nx-qa-prio-row .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c); flex: none; }
 .nx-qa-prio-row kbd { margin-left: auto; font-size: 10px; opacity: 0.7; }
 @keyframes nx-qa-prio-in { from { opacity: 0; transform: translateY(-4px) scale(0.96); } }
@@ -42,8 +43,9 @@
 .nx-qa-send svg { transform: translateX(1px); }
 
 /* Under the title: smart-add chips, the "Added" beat, or the example — one line, never jumpy. */
+/* Only there when it has something to say (chips or the "Added" beat): no example text. */
+.nx-qa-under:empty { display: none; }
 .nx-qa-under { min-height: 22px; display: flex; align-items: center; padding-left: 30px; font-size: 11.5px; color: var(--nx-textTer); }
-.nx-qa-under .try { font-style: italic; color: var(--nx-textSec); }
 .nx-qa-under .beat { display: inline-flex; align-items: center; gap: 5px; color: var(--nx-none); font-weight: 600; animation: nx-qa-beat 320ms var(--qa-spring, var(--ease-bouncy)) both; }
 @keyframes nx-qa-beat { from { opacity: 0; transform: translateY(4px) scale(0.96); } }
 
@@ -64,6 +66,9 @@
 .nx-qa-foot .due button.on { color: var(--nx-textPri); border-color: var(--nx-accent); background: color-mix(in srgb, var(--nx-accent) 14%, transparent); }
 .nx-qa-foot .due.typed button { opacity: 0.45; }
 .nx-qa-foot .due .date { position: absolute; inset: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.nx-qa-img { width: 26px; height: 22px; display: grid; place-items: center; border-radius: 11px; color: var(--nx-textSec); border: 1px solid var(--nx-stroke); transition: color 140ms, border-color 140ms, background-color 140ms, transform 140ms; }
+.nx-qa-img:hover { color: var(--nx-textPri); border-color: var(--nx-accent); }
+.nx-qa-foot > .date { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .nx-qa-foot .grow { flex: 1; }
 .nx-qa-foot .hints { display: flex; gap: 10px; font-size: 11px; color: var(--nx-textTer); white-space: nowrap; }
 .nx-qa-foot .hints span { display: inline-flex; align-items: center; gap: 4px; }

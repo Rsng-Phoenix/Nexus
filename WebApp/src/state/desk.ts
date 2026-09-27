@@ -22,6 +22,8 @@ export type DeskInfo = {
   mode: string;
   corner: string;
   fullWindow: boolean;
+  /** Extras this Desk build supports, e.g. "pickImages" (older Desks send none). */
+  caps?: string[];
 };
 
 export type DeskMessage =
@@ -35,7 +37,9 @@ export type DeskMessage =
   | { openUrl: string }
   | { focus: 'widget' }
   /** A page's window.__nexus* hooks are installed: the Desk may call them from now on. */
-  | { ready: 'widget' | 'quickadd' | 'full' };
+  | { ready: 'widget' | 'quickadd' | 'full' }
+  /** Ask the Desk to choose pictures natively; it answers via window.__nexusDeskImages(req, items). */
+  | { pickImages: string };
 
 type Handler = { postMessage(m: unknown): void };
 type DeskWindow = Window & {
@@ -78,4 +82,38 @@ export function openFullInDesk(o: { task?: string; page?: 'calendar' | 'settings
   if (o.page) msg.page = o.page;
   if (o.p) msg.p = o.p;
   return deskPost(msg);
+}
+
+type DeskImage = { name: string; type: string; b64: string };
+const imageRequests = new Map<string, (files: File[]) => void>();
+
+/**
+ * Pictures chosen with the Mac Desk's own open panel. A WKWebView ignores `<input type=file>`
+ * unless the app runs the panel itself, so inside a Desk that can ("pickImages" cap) the choice is
+ * made natively and the files come back here. Null when not available: use a file input then.
+ */
+export function deskPickImages(): Promise<File[]> | null {
+  if (!deskInfo.value?.caps?.includes('pickImages')) return null;
+  const req = `img${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+  const w = window as Window & { __nexusDeskImages?: (req: string, items: DeskImage[]) => void };
+  w.__nexusDeskImages = (id, items) => {
+    const done = imageRequests.get(id);
+    if (!done) return;
+    imageRequests.delete(id);
+    done(
+      (items ?? []).map((it) => {
+        const bin = atob(it.b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return new File([bytes], it.name, { type: it.type });
+      })
+    );
+  };
+  return new Promise<File[]>((resolve) => {
+    imageRequests.set(req, resolve);
+    if (!deskPost({ pickImages: req })) {
+      imageRequests.delete(req);
+      resolve([]);
+    }
+  });
 }

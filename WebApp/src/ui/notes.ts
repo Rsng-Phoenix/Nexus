@@ -21,6 +21,7 @@ import {
   splitListItemAt
 } from '../notes/autolist';
 import { encodeImage, imageFilesOf, ImageTooLargeError } from '../notes/images';
+import { deskPickImages } from '../state/desk';
 import {
   adjustScale,
   adjustSpansForEdit,
@@ -904,9 +905,7 @@ export function notesToolbar(
   picker.accept = 'image/*';
   picker.multiple = true;
   picker.className = 'nx-tool-file';
-  picker.addEventListener('change', () => {
-    const files = Array.from(picker.files ?? []);
-    picker.value = '';
+  const addPicked = (files: File[]) => {
     if (!files.length) return;
     const idx = activeIndex(getBlocks());
     void (async () => {
@@ -922,13 +921,24 @@ export function notesToolbar(
       setBlocks(next);
       onPersist();
     })();
+  };
+  picker.addEventListener('change', () => {
+    const files = Array.from(picker.files ?? []);
+    picker.value = '';
+    addPicked(files);
   });
+  // Inside the Mac Desk the file input is inert: the Desk chooses the pictures natively.
+  const chooseImages = () => {
+    const native = deskPickImages();
+    if (native) void native.then(addPicked);
+    else picker.click();
+  };
 
   const tools: { label: string; title: string; action: () => void }[] = [
     { label: '☐', title: 'Checklist', action: () => insertList('CHECKBOX') },
     { label: '•', title: 'Bullet list', action: () => insertList('BULLET') },
     { label: '1.', title: 'Numbered list', action: () => insertList('NUMBERED') },
-    { label: '🖼', title: 'Add image', action: () => picker.click() },
+    { label: '🖼', title: 'Add image', action: chooseImages },
     { label: 'A+', title: 'Larger text', action: () => applyFormat((b, s) => adjustScale(b, s, 0.08)) },
     { label: 'A−', title: 'Smaller text', action: () => applyFormat((b, s) => adjustScale(b, s, -0.08)) },
     { label: 'B', title: 'Bold', action: () => applyFormat((b, s) => toggleBold(b, s)) },

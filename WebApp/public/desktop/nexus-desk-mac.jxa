@@ -161,7 +161,7 @@ function setPref(key, value) {
 
 /**
  * Brings Nexus Desk to the front. macOS 14+ ignores activateIgnoringOtherApps, which left dialogs
- * (Uninstall, Change shortcut) open behind other apps and the Desk stuck waiting on them.
+ * (Change shortcut) open behind other apps and the Desk stuck waiting on them.
  */
 function activateApp() {
   try {
@@ -197,7 +197,7 @@ function guard(name, fn) {
 }
 
 /**
- * Brings the Desk forward for one of its own dialogs (Uninstall, Change shortcut) without
+ * Brings the Desk forward for one of its own dialogs (Change shortcut) without
  * becameActive: popping the widget up behind it. The caller clears suppressAutoShow when the
  * dialog is gone.
  */
@@ -213,53 +213,68 @@ function frontModal(win) {
   win.makeKeyWindow;
 }
 
-/**
- * Uninstall: confirm, then move the app to the Trash (recoverable) and remove its start-at-login
- * entry and settings. If macOS refuses the move, the app is shown in Finder to drag to the Trash
- * instead of quietly quitting as if it had worked.
- */
-function uninstall() {
-  activateForDialog(); // cleared by the uninstall: action once the alert is answered
-  const alert = $.NSAlert.alloc.init;
-  alert.messageText = 'Uninstall Nexus Desk?';
-  alert.informativeText =
-    'Moves the Nexus Desk app to the Trash and removes its start-at-login entry. Your tasks are not touched: they stay in Nexus and in your Google Drive backup.';
-  alert.addButtonWithTitle('Uninstall');
-  alert.addButtonWithTitle('Cancel');
-  alert.layout;
-  frontModal(alert.window);
-  if (Number(alert.runModal) !== 1000) return;
-  setHotKey(false);
-  setLogin(false);
-  const path = $.NSBundle.mainBundle.bundlePath.js;
-  const url = $.NSURL.fileURLWithPath(path);
-  let gone = false;
-  try {
-    gone = fm.trashItemAtURLResultingItemURLError(url, null, null) || !fm.fileExistsAtPath(path);
-  } catch (e) {
-    logLine('uninstall: trash failed: ' + e);
-  }
-  if (!gone) {
+// ─── Pictures for notes ("Add image") ─────────────────────────────────────────
+// WKWebView ignores <input type=file> unless the app runs the open panel itself, and its completion
+// block can't be called from JXA. So the page asks ({pickImages: req}), the Desk shows the panel,
+// reads the files and hands them back as base64 (window.__nexusDeskImages(req, items)). Formats the
+// page can't decode everywhere (HEIC from an iPhone, TIFF, BMP) are turned into JPEG here.
+const PICK_IMAGE_TYPES = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif', 'tiff', 'tif', 'bmp'];
+const PICK_IMAGE_MAX_BYTES = 30 * 1024 * 1024; // raw file; the page downsizes before storing
+const PICK_JPEG_QUALITY = 0.9;
+
+function imageItemFor(url) {
+  const data = $.NSData.dataWithContentsOfURL(url);
+  if (data.isNil() || Number(data.length) === 0 || Number(data.length) > PICK_IMAGE_MAX_BYTES) return null;
+  const name = url.lastPathComponent.js;
+  const ext = (url.pathExtension.js || '').toLowerCase();
+  const direct = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' }[ext];
+  if (direct) return { name: name, type: direct, b64: data.base64EncodedStringWithOptions(0).js };
+  const rep = $.NSBitmapImageRep.imageRepWithData(data);
+  const source = rep.isNil() ? $.NSBitmapImageRep.imageRepWithData($.NSImage.alloc.initWithData(data).TIFFRepresentation) : rep;
+  if (source.isNil()) return null;
+  const jpeg = source.representationUsingTypeProperties(3 /* NSBitmapImageFileTypeJPEG */, $({ NSImageCompressionFactor: PICK_JPEG_QUALITY }));
+  if (jpeg.isNil()) return null;
+  return { name: name.replace(/\.[^.]+$/, '') + '.jpg', type: 'image/jpeg', b64: jpeg.base64EncodedStringWithOptions(0).js };
+}
+
+function pickImages(view, req) {
+  const reply = (items) => evalIn(view, 'window.__nexusDeskImages&&window.__nexusDeskImages(' + JSON.stringify(req) + ',' + JSON.stringify(items) + ')');
+  const owner = view.window;
+  const op = $.NSOpenPanel.openPanel;
+  op.canChooseFiles = true;
+  op.canChooseDirectories = false;
+  op.allowsMultipleSelection = true;
+  op.allowedFileTypes = $(PICK_IMAGE_TYPES);
+  op.message = 'Choose pictures for the note';
+  op.prompt = 'Add';
+  pickingImages = true;
+  activateForDialog();
+  op.level = QUICK_LEVEL + 1; // above the Quick Add panel and the widget
+  op.beginWithCompletionHandler((resp) => {
+    const items = [];
     try {
-      gone = fm.removeItemAtPathError(path, null) || !fm.fileExistsAtPath(path);
+      if (Number(resp) === 1) {
+        op.URLs.js.forEach((u) => {
+          try {
+            const it = imageItemFor(u);
+            if (it) items.push(it);
+          } catch (e) {
+            logLine('pickImages: ' + e);
+          }
+        });
+      }
     } catch (e) {
-      logLine('uninstall: remove failed: ' + e);
+      logLine('pickImages: ' + e);
     }
-  }
-  defaults.removePersistentDomainForName(AGENT_LABEL);
-  defaults.synchronize;
-  if (!gone) {
-    logLine('uninstall: macOS kept the app bundle at ' + path);
-    const note = $.NSAlert.alloc.init;
-    note.messageText = 'One last step';
-    note.informativeText = 'macOS did not let Nexus Desk remove itself. Finder will open with it selected: drag it to the Trash.';
-    note.addButtonWithTitle('Show in Finder');
-    note.layout;
-    frontModal(note.window);
-    note.runModal;
-    $.NSWorkspace.sharedWorkspace.activateFileViewerSelectingURLs($([url]));
-  }
-  $.NSApp.terminate(null);
+    pickingImages = false;
+    suppressAutoShow = false;
+    // Back to the window that asked, typing where it was.
+    if (owner && !owner.isNil()) {
+      owner.makeKeyAndOrderFront(null);
+      owner.makeFirstResponder(view);
+    }
+    reply(items);
+  });
 }
 
 function logLine(text) {
@@ -276,6 +291,7 @@ function logLine(text) {
 }
 
 let panel = null;
+let pickingImages = false;
 let widgetHiddenForFull = false;
 let widgetFadeToken = 0;
 // becameActive: shows the widget when the Desk is brought forward from outside; while one of
@@ -342,7 +358,10 @@ function deskInfo() {
     login: loginEnabled(),
     mode: pref('mode', 'float'),
     corner: pref('corner', 'off'),
-    fullWindow: true
+    fullWindow: true,
+    // What this Desk can do for the page ("pickImages": file inputs are inert in a WKWebView
+    // without an open-panel delegate, so pictures are chosen natively and handed over).
+    caps: ['pickImages']
   };
 }
 
@@ -1366,7 +1385,6 @@ function buildMenu() {
   m.addItem(login);
   m.addItem(item('Reload', 'reload:', 'r'));
   m.addItem($.NSMenuItem.separatorItem);
-  m.addItem(item('Uninstall Nexus Desk…', 'uninstall:'));
   m.addItem(item('Quit Nexus Desk', 'quit:', 'q'));
   return m;
 }
@@ -1643,6 +1661,12 @@ function deskReady(kind) {
 function handleDesk(m, view) {
   if (!m || typeof m !== 'object') return 'ignored';
   if (m.ready) return deskReady(String(m.ready)) ? 'ready:' + m.ready : 'ready:unknown';
+  if (m.pickImages) {
+    const req = String(m.pickImages);
+    const from = view;
+    later(() => pickImages(from, req)); // an open panel must not start inside WebKit's callback
+    return 'pickImages';
+  }
   if (m.open === 'full') {
     openFullWindow({ task: m.task, action: m.action, open: m.page, p: m.p });
     return 'open:full';
@@ -1889,7 +1913,7 @@ ObjC.registerSubclass({
       hideQuickAdd();
     }),
     'quickResignedKey:': act('quickResignedKey', () => {
-      if (!TEST) hideQuickAdd();
+      if (!TEST && !pickingImages) hideQuickAdd(); // the picture picker takes key status for a moment
     }),
     'quickFallbackAdd:': act('quickFallbackAdd', () => quickFallbackAdd()),
     'fullWillClose:': act('fullWillClose', () => fullWillClose()),
@@ -1992,13 +2016,6 @@ ObjC.registerSubclass({
     }),
     'screensChanged:': act('screensChanged', () => rebuildCorners()),
     'toggleLogin:': act('toggleLogin', () => setLogin(!loginEnabled())),
-    'uninstall:': act('uninstall', () => {
-      try {
-        uninstall();
-      } finally {
-        suppressAutoShow = false; // Cancel (or a failure): the widget may auto-show again
-      }
-    }),
     'quit:': act('quit', () => $.NSApp.terminate(null)),
     'testFinish:': act('testFinish', () => testFinish()),
     // window.open(): Google's sign-in gets its own small window; a Nexus link opens in the full

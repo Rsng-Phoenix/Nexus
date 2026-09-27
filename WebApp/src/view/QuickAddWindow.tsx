@@ -7,7 +7,7 @@ import { clampPanelHeight, clipboardHint, cornerVector, parseQuickAddParams } fr
 import { parseSmartAdd, type SmartKind } from '../lib/smartAdd';
 import { fromStorage } from '../notes/codec';
 import { getSettings } from '../settings/store';
-import { deskInfo, deskPost, inNexusDesk } from '../state/desk';
+import { deskInfo, deskPickImages, deskPost, inNexusDesk } from '../state/desk';
 import { activeTasks, addTask } from '../state/store';
 import { scheduleSync } from '../sync/manager';
 import type { Priority, Task } from '../types';
@@ -84,6 +84,8 @@ export function QuickAddWindow() {
   const [priority, setPriority] = useState<Priority>(() => params.priority ?? DEFAULT_PRIORITY);
   // The inline priority chooser under the title (a dropdown would hang outside the panel).
   const [prioOpen, setPrioOpen] = useState(false);
+  // Keyboard highlight inside the open chooser (←/→ or ↑/↓ move it, ⏎ picks it).
+  const [prioSel, setPrioSel] = useState(0);
   const [title, setTitle] = useState(params.text);
   const [ignored, setIgnored] = useState<SmartKind[]>([]);
   const [due, setDue] = useState('');
@@ -96,6 +98,7 @@ export function QuickAddWindow() {
   const chipsRef = useRef<HTMLDivElement>(null);
   const notesHost = useRef<HTMLDivElement>(null);
   const dateRef = useRef<HTMLInputElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const notes = useRef(params.notes);
   const editor = useRef<ReturnType<typeof renderNotesEditor> | null>(null);
   const escArmed = useRef(0);
@@ -288,12 +291,39 @@ export function QuickAddWindow() {
     const onKey = (e: KeyboardEvent) => {
       // Enter / Esc while an IME is composing belong to the IME.
       if (e.repeat || e.isComposing || e.keyCode === 229) return;
+      const plain = !e.metaKey && !e.altKey && !e.ctrlKey && !e.shiftKey;
+      // The open priority chooser owns the arrows, 1–4 and ⏎ until something is picked.
+      if (prioOpen && plain) {
+        const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+        if (step) {
+          e.preventDefault();
+          setPrioSel((i) => (i + step + PRIORITIES.length) % PRIORITIES.length);
+          return;
+        }
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          e.stopPropagation();
+          pick(PRIORITIES[prioSel]);
+          return;
+        }
+        if (/^[1-4]$/.test(e.key)) {
+          e.preventDefault();
+          pick(PRIORITIES[Number(e.key) - 1]);
+          return;
+        }
+      }
       if ((e.metaKey || e.altKey || e.ctrlKey) && /^[1-4]$/.test(e.key)) {
         e.preventDefault();
         pick(PRIORITIES[Number(e.key) - 1]);
       } else if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
         e.preventDefault();
         save(true);
+      } else if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.defaultPrevented) {
+        // ⏎ with the focus outside the text fields (e.g. after clicking a chip) still adds.
+        const t = e.target as Element | null;
+        if (t && t.closest && t.closest('textarea, input, [contenteditable="true"], button, a')) return;
+        e.preventDefault();
+        save(!e.shiftKey);
       } else if (e.key === 'Escape') {
         e.preventDefault();
         if (prioOpen) {
@@ -374,6 +404,8 @@ export function QuickAddWindow() {
             }}
             onKeyDown={(e) => {
               if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229 || e.metaKey || e.ctrlKey || e.altKey) return;
+              // With the chooser open, ⏎ picks the highlighted priority (the window handler does it).
+              if (prioOpen) return;
               e.preventDefault();
               save(!e.shiftKey);
             }}
@@ -382,7 +414,12 @@ export function QuickAddWindow() {
             class={`nx-pri-pill press ${prioOpen ? 'open' : ''}`}
             title={`Priority (${mod}1–4)`}
             aria-expanded={prioOpen}
-            onClick={() => setPrioOpen((o) => !o)}
+            onClick={() => {
+              setPrioSel(Math.max(0, PRIORITIES.indexOf(effective)));
+              setPrioOpen((o) => !o);
+              // Typing carries on in the title while the chooser is open.
+              focusTitle();
+            }}
           >
             {meta.label}
             <Icon name="expandMore" size={16} />
@@ -399,8 +436,9 @@ export function QuickAddWindow() {
                 type="button"
                 role="radio"
                 aria-checked={effective === p}
-                class={effective === p ? 'on' : ''}
+                class={`${effective === p ? 'on' : ''} ${prioSel === i ? 'sel' : ''}`}
                 style={{ '--c': PRIORITY_META[p].color, '--i': i } as JSX.CSSProperties}
+                onMouseEnter={() => setPrioSel(i)}
                 onClick={() => pick(p)}
               >
                 <span class="dot" />
@@ -439,9 +477,7 @@ export function QuickAddWindow() {
                 );
               })}
             </div>
-          ) : (
-            <span class="try">try “call CA tomorrow 5pm !1”</span>
-          )}
+          ) : null}
         </div>
         <div class="nx-qa-notes" data-stagger onClick={(e) => e.target === e.currentTarget && editor.current?.focusEnd()}>
           <div ref={notesHost} class="nx-qa-notes-host" aria-label="Notes" />
@@ -475,6 +511,37 @@ export function QuickAddWindow() {
             </button>
             <input ref={dateRef} type="date" class="date" tabIndex={-1} aria-hidden="true" value={due} onChange={(e) => setDue(e.currentTarget.value)} />
           </span>
+          <button
+            type="button"
+            class="nx-qa-img press"
+            title="Add a picture (or paste / drop one into the notes)"
+            aria-label="Add a picture"
+            onClick={() => {
+              // In the Mac Desk a file input is inert: the Desk picks natively.
+              const native = deskPickImages();
+              if (native)
+                void native.then((files) => {
+                  if (files.length) void editor.current?.insertImages(files);
+                });
+              else fileRef.current?.click();
+            }}
+          >
+            <Icon name="image" size={15} />
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            multiple
+            class="date"
+            tabIndex={-1}
+            aria-hidden="true"
+            onChange={(e) => {
+              const files = Array.from(e.currentTarget.files ?? []);
+              e.currentTarget.value = '';
+              if (files.length) void editor.current?.insertImages(files);
+            }}
+          />
           <span class="grow" />
           <span class="hints">
             <span><kbd>⏎</kbd> add</span>
