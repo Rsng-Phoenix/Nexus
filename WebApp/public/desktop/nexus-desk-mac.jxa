@@ -152,6 +152,75 @@ function setPref(key, value) {
   pushDeskInfo(); // every Desk setting is mirrored into the pages (web Settings → Nexus Desk)
 }
 
+/**
+ * Brings Nexus Desk to the front. macOS 14+ ignores activateIgnoringOtherApps, which left dialogs
+ * (Uninstall, Change shortcut) open behind other apps and the Desk stuck waiting on them.
+ */
+function activateApp() {
+  try {
+    if ($.NSApp.respondsToSelector('activate')) $.NSApp.activate;
+    else $.NSApp.activateIgnoringOtherApps(true);
+  } catch (e) {
+    $.NSApp.activateIgnoringOtherApps(true);
+  }
+}
+
+/** A dialog window the user must answer: above every Desk window, even if activation is refused. */
+function frontModal(win) {
+  win.level = QUICK_LEVEL + 1;
+  win.orderFrontRegardless;
+  win.makeKeyWindow;
+}
+
+/**
+ * Uninstall: confirm, then move the app to the Trash (recoverable) and remove its start-at-login
+ * entry and settings. If macOS refuses the move, the app is shown in Finder to drag to the Trash
+ * instead of quietly quitting as if it had worked.
+ */
+function uninstall() {
+  activateApp();
+  const alert = $.NSAlert.alloc.init;
+  alert.messageText = 'Uninstall Nexus Desk?';
+  alert.informativeText =
+    'Moves the Nexus Desk app to the Trash and removes its start-at-login entry. Your tasks are not touched: they stay in Nexus and in your Google Drive backup.';
+  alert.addButtonWithTitle('Uninstall');
+  alert.addButtonWithTitle('Cancel');
+  alert.layout;
+  frontModal(alert.window);
+  if (Number(alert.runModal) !== 1000) return;
+  setHotKey(false);
+  setLogin(false);
+  const path = $.NSBundle.mainBundle.bundlePath.js;
+  const url = $.NSURL.fileURLWithPath(path);
+  let gone = false;
+  try {
+    gone = fm.trashItemAtURLResultingItemURLError(url, null, null) || !fm.fileExistsAtPath(path);
+  } catch (e) {
+    logLine('uninstall: trash failed: ' + e);
+  }
+  if (!gone) {
+    try {
+      gone = fm.removeItemAtPathError(path, null) || !fm.fileExistsAtPath(path);
+    } catch (e) {
+      logLine('uninstall: remove failed: ' + e);
+    }
+  }
+  defaults.removePersistentDomainForName(AGENT_LABEL);
+  defaults.synchronize;
+  if (!gone) {
+    logLine('uninstall: macOS kept the app bundle at ' + path);
+    const note = $.NSAlert.alloc.init;
+    note.messageText = 'One last step';
+    note.informativeText = 'macOS did not let Nexus Desk remove itself. Finder will open with it selected: drag it to the Trash.';
+    note.addButtonWithTitle('Show in Finder');
+    note.layout;
+    frontModal(note.window);
+    note.runModal;
+    $.NSWorkspace.sharedWorkspace.activateFileViewerSelectingURLs($([url]));
+  }
+  $.NSApp.terminate(null);
+}
+
 function logLine(text) {
   try {
     const line = new Date().toISOString() + ' ' + text + '\n';
@@ -355,7 +424,7 @@ function isShown() {
 }
 
 function show() {
-  $.NSApp.activateIgnoringOtherApps(true);
+  activateApp();
   if (calPanel) calPanel.orderFrontRegardless;
   panel.makeKeyAndOrderFront(null);
   panel.orderFrontRegardless;
@@ -629,9 +698,9 @@ function openRecorder() {
     recorderShowCandidate();
     return $(); // swallowed: the key was recorded, not typed
   });
-  $.NSApp.activateIgnoringOtherApps(true);
+  activateApp();
   recorderWin.center;
-  recorderWin.makeKeyAndOrderFront(null);
+  frontModal(recorderWin);
   $.NSApp.runModalForWindow(recorderWin);
   // Back from the modal loop.
   if (recorderMonitor) {
@@ -726,7 +795,7 @@ function openFullWindow(link) {
   if (TEST) return; // created hidden; the test never orders it front
   applyActivationPolicyFor(true);
   fullWin.makeKeyAndOrderFront(null); // visible before the activation notice, so becameActive: leaves the widget alone
-  $.NSApp.activateIgnoringOtherApps(true);
+  activateApp();
 }
 
 function applyActivationPolicyFor(fullVisible) {
@@ -878,7 +947,7 @@ function showQuickAdd(opts) {
   }
   if (!quickPanel.isVisible) quickPanel.setFrameDisplay(quickFrame(quickPanel.frame.size.height), false);
   quickPanel.orderFrontRegardless;
-  $.NSApp.activateIgnoringOtherApps(true);
+  activateApp();
   quickPanel.makeKeyWindow;
   if (quickFallback) quickPanel.makeFirstResponder(quickFallback.field);
   else quickPanel.makeFirstResponder(quickWeb);
@@ -1694,18 +1763,11 @@ ObjC.registerSubclass({
     'uninstall:': {
       types: ['void', ['id']],
       implementation: () => {
-        $.NSApp.activateIgnoringOtherApps(true);
-        const alert = $.NSAlert.alloc.init;
-        alert.messageText = 'Uninstall Nexus Desk?';
-        alert.informativeText =
-          'Removes the Nexus Desk app and its start-at-login entry. Your tasks are not touched: they stay in Nexus and in your Google Drive backup.';
-        alert.addButtonWithTitle('Uninstall');
-        alert.addButtonWithTitle('Cancel');
-        if (alert.runModal !== 1000) return;
-        setLogin(false);
-        fm.removeItemAtPathError($.NSBundle.mainBundle.bundlePath.js, null);
-        defaults.removePersistentDomainForName(AGENT_LABEL);
-        $.NSApp.terminate(null);
+        try {
+          uninstall();
+        } catch (e) {
+          logLine('uninstall failed: ' + e);
+        }
       }
     },
     'quit:': { types: ['void', ['id']], implementation: () => $.NSApp.terminate(null) },
