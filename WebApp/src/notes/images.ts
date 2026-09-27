@@ -10,7 +10,7 @@ export const JPEG_QUALITY = 0.82;
 /** A PNG with transparency is kept as PNG only while it stays under this size. */
 export const PNG_KEEP_MAX_BYTES = 300 * 1024;
 /** Anything bigger than this after resizing is refused. */
-export const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+export const MAX_IMAGE_BYTES = 1900 * 1024; // must fit one Room row on Android (2 MB cursor window)
 
 export const IMAGE_FILE_PREFIX = 'nexus_img_';
 export const IMAGE_ID_LENGTH = 16;
@@ -101,7 +101,7 @@ function canvasToBlob(canvas: HTMLCanvasElement, type: ImageMime, quality?: numb
 
 /**
  * Downscales to ≤ 1600 px and re-encodes: JPEG q 0.82, or PNG when the picture has transparency
- * and the PNG stays under 300 KB. Throws ImageTooLargeError above 4 MB. Browser only.
+ * and the PNG stays under 300 KB. Throws ImageTooLargeError above MAX_IMAGE_BYTES (1.9 MB). Browser only.
  */
 export async function encodeImage(file: Blob): Promise<EncodedImage> {
   const src = await decode(file);

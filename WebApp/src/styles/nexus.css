@@ -254,11 +254,6 @@ html[data-motion='reduced'] .nx-skel::after { animation: none; }
 .nx-snack button { color: var(--nx-accent); font-weight: 600; }
 .nx-syncpill { position: absolute; z-index: 31; right: 88px; bottom: calc(28px + var(--safe-bottom)); padding: 6px 12px; border-radius: 16px; background: var(--nx-surfaceEl); border: 0.5px solid var(--nx-stroke); font-size: 11px; color: var(--nx-textSec); box-shadow: var(--shadow-float); }
 
-/* ─── Reduced motion ──────────────────────────────────────────────────────── */
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
-}
-
 /* Buttons whose label must sit dead-centre (the global rule keeps list rows left-aligned). */
 .nx-segmented button, .nx-stepper button, .nx-icon-btn, .nx-tool, .nx-text-btn, .nx-send, .nx-fab,
 .nx-primary, .nx-check, .nx-switch { text-align: center; }

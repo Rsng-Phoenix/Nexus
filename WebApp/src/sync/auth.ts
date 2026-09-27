@@ -206,12 +206,22 @@ export function hasLiveToken(): boolean {
   return !!accessToken && Date.now() < tokenExpires - 60000;
 }
 
+/**
+ * Google's tokeninfo for [token], asked with POST so the token travels in the body and never in a
+ * URL (which proxies, logs and the browser's network history keep).
+ */
+export function tokenInfo(token: string): Promise<Response> {
+  return fetch('https://oauth2.googleapis.com/tokeninfo', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ access_token: token }).toString()
+  });
+}
+
 /** True if token can read the Drive app data folder (see / create / delete app backup). */
 export async function hasDriveAppDataAccess(token: string): Promise<boolean> {
   try {
-    const info = await fetch(
-      `https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(token)}`
-    );
+    const info = await tokenInfo(token);
     if (info.ok) {
       const data = (await info.json()) as { scope?: string; error?: string };
       if (!data.error && (data.scope ?? '').includes('drive.appdata')) return true;
@@ -239,7 +249,7 @@ export async function hasDriveAppDataAccess(token: string): Promise<boolean> {
  */
 export async function tokenHasScope(token: string, scope: string): Promise<boolean> {
   try {
-    const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(token)}`);
+    const res = await tokenInfo(token);
     if (!res.ok) return false;
     const data = (await res.json()) as { scope?: string; error?: string };
     return !data.error && (data.scope ?? '').split(/\s+/).includes(scope);
@@ -254,7 +264,7 @@ export async function tokenEmail(token: string): Promise<string> {
   const hit = emailCache.get(token);
   if (hit !== undefined) return hit;
   try {
-    const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(token)}`);
+    const res = await tokenInfo(token);
     if (!res.ok) return '';
     const email = String(((await res.json()) as { email?: string }).email ?? '');
     emailCache.set(token, email);

@@ -229,7 +229,7 @@ export async function addImageFromFile(file: Blob): Promise<string | null> {
     if (!have) await putImage({ id: enc.id, blob: enc.blob, w: enc.w, h: enc.h, addedAt: Date.now(), uploaded: false });
     return enc.id;
   } catch (e) {
-    showSnack(e instanceof ImageTooLargeError ? 'Image is too large (over 4 MB after resizing)' : 'Could not add that image');
+    showSnack(e instanceof ImageTooLargeError ? 'Image is too large (over 1.9 MB after resizing)' : 'Could not add that image');
     return null;
   }
 }
@@ -243,8 +243,8 @@ export function imageInsertIndex(blocks: NoteBlock[], idx: number): number {
 
 // ---- Editor -----------------------------------------------------------------------------------
 
-/** Caret after focusing a block: at the end, left alone, or at a character offset. */
-type CaretPos = 'end' | 'keep' | number;
+/** Caret after focusing a block: at the end, left alone, at a character offset, or a whole selection. */
+type CaretPos = 'end' | 'keep' | number | Sel;
 
 export function renderNotesEditor(
   container: HTMLElement,
@@ -294,8 +294,10 @@ export function renderNotesEditor(
         sel?.addRange(range);
         return;
       }
-      if (caret === 0 && !readEditText(row)) return; // empty line: focus alone puts the caret there
-      restoreSelection(row, { start: caret, end: caret });
+      const len = readEditText(row).length;
+      if (!len) return; // empty line: focus alone puts the caret there
+      const want = typeof caret === 'number' ? { start: caret, end: caret } : caret;
+      restoreSelection(row, { start: Math.min(want.start, len), end: Math.min(want.end, len) });
     });
   };
 
@@ -451,6 +453,9 @@ export function renderNotesEditor(
 
   const draw = (): void => {
     const keepFocus = editingId;
+    // The focused line is rebuilt below: remember the caret / selection so it comes back in place.
+    const focusedEl = keepFocus ? container.querySelector<HTMLElement>(`[data-block="${keepFocus}"] .nx-note-edit`) : null;
+    const keepSel = focusedEl ? getSelectionFromEl(focusedEl) : null;
     const hasContent = notesHasContent();
     container.innerHTML = '';
     blocks.forEach((block, index) => {
@@ -557,10 +562,17 @@ export function renderNotesEditor(
         onChange(toStorage(blocks));
       });
       el.addEventListener('keydown', (e) => {
+        // Keys while an IME is composing (Enter picks a candidate) belong to the IME.
+        if (e.isComposing || e.keyCode === 229) return;
         const liveIdx = indexOf(block.id);
         if (liveIdx < 0) return;
         const live = blocks[liveIdx];
-        if (e.key === 'Enter' && !e.isComposing) {
+        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey || e.altKey)) {
+          // ⌘/Ctrl/Alt+⏎ is the page's "save" (it bubbles on): the note itself stays as it is.
+          e.preventDefault();
+          return;
+        }
+        if (e.key === 'Enter') {
           e.preventDefault();
           if (live.type === 'TEXT') {
             // Enter and Shift+Enter both start a new line inside the description.
@@ -622,10 +634,11 @@ export function renderNotesEditor(
           const delta = e.shiftKey ? -1 : 1;
           const nextIndent = Math.max(0, live.indent + delta);
           if (nextIndent !== live.indent) {
+            const caret = getSelectionFromEl(el);
             blocks[liveIdx] = { ...live, indent: nextIndent };
             flushStorage();
             draw();
-            focusBlock(block.id);
+            focusBlock(block.id, caret ?? 'end');
           }
         }
       });
@@ -681,7 +694,7 @@ export function renderNotesEditor(
       row.appendChild(el);
       container.appendChild(row);
     });
-    if (keepFocus) focusBlock(keepFocus, 'keep');
+    if (keepFocus) focusBlock(keepFocus, keepSel ?? 'keep');
   };
 
   let activeId: string | null = blocks[0]?.id ?? null;

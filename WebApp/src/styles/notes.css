@@ -20,5 +20,5 @@
 .nx-note-img-wrap:hover .nx-note-img-x, .nx-note-img-wrap:focus-within .nx-note-img-x, .nx-note-img-wrap:focus-visible .nx-note-img-x { opacity: 1; }
 @media (hover: none) { .nx-note-img-x { opacity: 1; } }
 
-.nx-detail-notes.nx-note-drop { outline: 2px dashed var(--nx-accent); outline-offset: 4px; border-radius: 10px; }
+.nx-detail-notes.nx-note-drop, .nx-qa-notes-host.nx-note-drop { outline: 2px dashed var(--nx-accent); outline-offset: 4px; border-radius: 10px; }
 .nx-tool-file { display: none; }

@@ -9,7 +9,7 @@ import { getAccessToken } from '../sync/auth';
 import type { Task } from '../types';
 import type { Cell } from './cell';
 import { csvRowsToCells, parseCsv } from './csv';
-import { markSheetRemoved, markSheetUpdated } from './linkedSheetsSync';
+import { clearLinkedSheetsMeta, markSheetRemoved, markSheetUpdated } from './linkedSheetsSync';
 import { pickerAvailable } from './picker';
 import { buildImportPlan, type ImportItem } from './plan';
 import { readRowsViaApi, SheetNeedsPickError } from './sheetsApi';
@@ -189,7 +189,15 @@ export async function applySheet(link: Pick<LinkedSheet, 'id' | 'sheetId' | 'gid
   const plan = await planSheet(link, link.mapping, rows, all);
   const snap = await loadSnap(link.id);
 
-  const changed = plan.items.filter((i) => !byUuid.has(i.taskUuid) || snap.rows[i.taskUuid] !== rowHash(i));
+  // A row this device has no snapshot for, whose task already exists and is live (the sheet was
+  // linked on another device, or brought by Scan to set up): the task came with the Drive backup,
+  // maybe edited since. Only its hash is recorded, so those edits aren't reverted everywhere.
+  const known = (i: ImportItem) => {
+    if (i.taskUuid in snap.rows) return false;
+    const cur = byUuid.get(i.taskUuid);
+    return !!cur && cur.deletedAt === 0;
+  };
+  const changed = plan.items.filter((i) => !known(i) && (!byUuid.has(i.taskUuid) || snap.rows[i.taskUuid] !== rowHash(i)));
   const r = changed.length ? await importTasks(changed.map(toRow)) : { added: 0, updated: 0 };
 
   // Rows that arrived after their alert time: one alert now (not for tasks you finished or deleted).
@@ -250,6 +258,17 @@ export async function dropSheetSnapshot(id: string): Promise<void> {
   await db.deleteMeta(SNAP(id));
 }
 
+/**
+ * Forgets every linked sheet on this device: the links, their row snapshots, and the sync
+ * timestamps (sign-out with "Remove tasks", account switch). Nothing reaches Drive: the links stay
+ * in the old account's nexus_linked_sheets.json for its other devices.
+ */
+export async function forgetAllLinkedSheets(): Promise<void> {
+  patchSettings({ linkedSheets: [] });
+  await db.deleteMetaWithPrefix(SNAP(''));
+  await clearLinkedSheetsMeta();
+}
+
 /** The sheet's tasks that are still ahead: open (not finished) and due today or later. */
 export async function upcomingSheetTasks(id: string, today = dateToIso(new Date())): Promise<Task[]> {
   const made = new Set(Object.keys((await loadSnap(id)).rows));
@@ -268,8 +287,9 @@ export async function unlinkSheet(id: string, removeUpcoming = false): Promise<n
   if (gone.length) await deleteTasks(gone);
   const link = getSettings().linkedSheets.find((l) => l.id === id);
   patchSettings({ linkedSheets: getSettings().linkedSheets.filter((l) => l.id !== id) });
-  await dropSheetSnapshot(id);
+  // Recorded straight after the settings change, so a sync running now can't bring the link back.
   if (link) await markSheetRemoved(link); // the removal reaches your other devices (linkedSheetsSync.ts)
+  await dropSheetSnapshot(id);
   return gone;
 }
 
@@ -283,7 +303,10 @@ export function refreshSheet(id: string): Promise<SheetResult | null> {
     if (!link) return null;
     sheetBusy.value = { ...sheetBusy.value, [id]: true };
     try {
-      const result = await applySheet(link, await fetchSheetRows(link));
+      const rows = await fetchSheetRows(link);
+      // Unlinked (or this device's data removed) while the sheet was being read: nothing to write.
+      if (!getSettings().linkedSheets.some((l) => l.id === id)) return null;
+      const result = await applySheet(link, rows);
       patchLink(id, { lastSyncAt: Date.now(), lastError: '' });
       return result;
     } catch (e) {
