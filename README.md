@@ -1,231 +1,120 @@
 # NEXUS
 
-A priority-driven productivity app built around the matrix, with every calendar you use in one place.
+**A to-do app that sorts your tasks by priority, with all your calendars in one place.**
+On the web, on your Mac, on Windows and on Android. Free, and your data stays in your own Google Drive.
 
-Unlike to-do apps that give you an endless list, Nexus sorts tasks into priority quadrants so you always see what matters first. It pulls in your Google, Zoho, iCloud and Outlook calendars next to your tasks, with meeting links one tap away.
-
-**Use it now:** [rsng-phoenix.github.io/Nexus](https://rsng-phoenix.github.io/Nexus/) (web app, installable on iPhone, Android, Mac and Windows) · Android app from [Releases](https://github.com/Rsng-Phoenix/Nexus/releases)
-
----
-
-## Highlights
-
-- **Priority matrix:** High, Medium, Low and No priority quadrants, with drag and drop between them
-- **One calendar for everything:** your deadlines and reminders, plus linked Google, Zoho, iCloud and Outlook calendars, each labelled with where it came from
-- **Meeting heads-ups:** an optional alert before meetings, with a Join button for Google Meet, Zoom and Teams
-- **Sync with your own Google Drive:** tasks go to a private Nexus folder in your Drive and are never stored on a Nexus server
-- **Works offline:** everything saves on the device first and syncs when you're back online
-- **Nexus Desk:** a floating Nexus window with a hot corner for Mac and Windows, installed with one command
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/27d8d266-e9fe-4d86-bfca-61ac682b4e07" width="220" alt="Nexus priority matrix">
+</p>
 
 ---
 
-## Matrix-Based Task Management
+## Get Nexus
 
-- Create, edit, archive and delete tasks
-- Four quadrants: High, Medium, Low and No priority
-- Drag and drop between quadrants, and reorder within one, with haptics
-- Swipe to complete or delete
-- Pin important tasks
-- "Delete all" in a quadrant, with Undo
-- Recently deleted: restore anything, kept for as long as you choose
-- Archive: find, restore or delete old tasks from Settings
+| Where | How |
+| --- | --- |
+| **Web** (any device) | Open **[rsng-phoenix.github.io/Nexus](https://rsng-phoenix.github.io/Nexus/)**. Works in the browser, or install it like an app on iPhone, iPad, Android, Mac and Windows. |
+| **Mac app** | Paste one line into **Terminal** (see below). |
+| **Windows app** | Paste one line into **PowerShell** (see below). |
+| **Android app** | [Download Nexus.apk](https://github.com/Rsng-Phoenix/Nexus/releases/latest/download/Nexus.apk) (latest release) |
 
----
+### Mac: install in one line
 
-## Calendar
+Open **Terminal** (press `⌘ Space`, type *Terminal*, press Enter), paste this and press Enter:
 
-- Month and day views of your deadlines and reminders
-- **Linked calendars:** Google, Zoho, iCloud, Outlook or any private iCal (.ics) link
-- Every item shows where it came from; tap a calendar in the legend to hide or show it
-- Checked every 15 minutes by default (you choose from 5 minutes to 6 hours) and whenever you open Nexus
-- **Join** button on events with a Google Meet, Zoom or Teams link
-- Turn any event into a task, with the meeting link included
-- Add any task with a deadline to Google, Apple or Outlook Calendar in one tap
-- Import and export calendar (.ics) files
-- Import deadlines from Excel or CSV: every dated row becomes a task
-- Choose whether Nexus opens on the Matrix or the Calendar
+```bash
+curl -fsSL https://rsng-phoenix.github.io/Nexus/desktop/install-mac.sh | bash
+```
 
-> Nexus doesn't replace your calendars. Events stay in Google, Zoho, iCloud or Outlook; Nexus shows them all together.
+That's it. **Nexus Desk** appears in your menu bar and in `~/Applications`, and starts when you log in.
+No admin password, no App Store, nothing else to download. Run the same line again to update.
 
----
+Remove it: `curl -fsSL https://rsng-phoenix.github.io/Nexus/desktop/install-mac.sh | bash -s -- --uninstall`
 
-## Deadlines & Reminders
+### Windows: install in one line
 
-- **Deadlines:** pick a due day and get alerts days before, on the day or after
-- **Exact reminders** at a date and time; the notification opens the task
-- **All-day reminders** that repeat through the day (every hour, every 2 hours, or your own interval)
-- **Date-range reminders** across several days, for exam prep, workout plans or habits
-- **Meeting heads-ups** from linked calendars, from 30 minutes before up to when they start
-- Pinned tasks can stay in your notifications until done
-- Notification actions: **Done**, **Snooze**, **Open**
-- Reminders survive a phone restart and clear themselves after ringing
-- **Full control:** pause notifications, turn each type on or off, group them, and set an hourly safety limit
-- Web reminders ring even when the tab is closed (web push)
+Open **PowerShell**, paste this and press Enter:
+
+```powershell
+irm https://rsng-phoenix.github.io/Nexus/desktop/install-windows.ps1 | iex
+```
 
 ---
 
-## Notes
+## What it does
 
-Every task can hold rich notes:
+**Priority matrix.** Every task sits in one of four boxes: High, Medium, Low or No priority. Drag tasks between them, pin the important ones, swipe to finish. You always see what matters first.
 
-- Plain text and multi-line descriptions
-- Checklists
-- Bullet and numbered lists
-- Nested content
-- Long-form planning notes
+**All your calendars together.** Google, Zoho, iCloud, Outlook or any iCal link, next to your own deadlines. One-tap **Join** for Meet, Zoom and Teams, and **Clash radar** warns you when two meetings overlap.
 
-Good for study plans, project tracking, journals and meeting notes.
+**Reminders that actually reach you.** Deadlines, exact-time reminders, all-day repeats and date-range reminders, with **Done / Snooze / Open** right on the notification.
 
----
+**Rich notes.** Checklists, bullet and numbered lists that start as you type, and pictures in any task.
 
-## Sync & Backup
+**Linked Google Sheets.** Link a sheet and its rows become tasks that keep updating as the sheet changes. Excel, CSV and calendar files import too.
 
-- **Nexus Sync** through your own Google Drive: Android ↔ Android, Android ↔ Web, Web ↔ Web
-- Stays signed in: no more reconnecting every hour
-- Automatic conflict handling: the newest change wins, and deletions sync too
-- Switching Google accounts asks what to do with the tasks on this device
-- Local backup files, and restore from backup
-- Nothing is stored on a Nexus server: your tasks live on your devices and in your Drive
+**Quick add from anywhere.** Type *"call CA tomorrow 5pm !1"* and Nexus sets the date, reminder and priority for you. `⌘K` / `Ctrl K` opens a command palette, and the whole matrix works from the keyboard (`?` lists every shortcut).
+
+**Private by design.** Tasks sync through a private folder in **your own Google Drive**. Nothing is stored on a Nexus server. Works offline and syncs when you're back.
 
 ---
 
-## Everywhere You Work
+## The Mac app (Nexus Desk)
 
-- **Android app** with home-screen widgets: Matrix, Today, Quick add, Next up and a single quadrant
-- **Web app** that installs like an app on iPhone, iPad, Android, Mac and Windows, with notifications
-- **Nexus Desk** for Mac and Windows: a small always-at-hand Nexus window
-  - Float on top, sit on the desktop, or behave like a normal window
-  - Hot corner: move the mouse to a screen corner to show or hide Nexus
-  - Starts at login
-  - Mac: `curl -fsSL https://rsng-phoenix.github.io/Nexus/desktop/install-mac.sh | bash`
-  - Windows (PowerShell): `irm https://rsng-phoenix.github.io/Nexus/desktop/install-windows.ps1 | iex`
+A real Mac app, not a browser tab:
 
----
+- **Menu bar icon** and a full Nexus window, with the same sign-in and data as the web app
+- **Quick Add panel** from any app with `⌃ ⌥ N` (change it to any shortcut you like)
+- **Hot corner:** move the mouse to a screen corner to show or hide Nexus
+- Float on top, sit on the desktop, or act as a normal window
+- **Real macOS notifications** with Done, Snooze and Open
+- Select text in any app → right-click → **Services → Add to Nexus**
+- `nexus://add?text=…` links for Shortcuts, Raycast and Alfred
+- Starts at login
 
-## Personalization
+Windows gets the same Desk window, hot corner and `Ctrl Alt N` quick add.
 
-- Light, dark and system themes
-- Text size and layout controls
-- Choose your start screen (Matrix or Calendar) and the first day of the week
-- You set the numbers: check-in delay, snooze length, reminder hours and trash retention
-- Settings grouped into clear categories
-- A hands-on tour: you try each step yourself instead of reading slides
+## The Android app
 
----
+- Home-screen widgets: Matrix, Today, Quick add, Next up and a single quadrant
+- Reminders that survive a restart, with actions on the notification
+- Share any task as text, an image card or a PDF
 
-## Technology Stack
+## Moving between devices
 
-**Android**
-- Kotlin, Jetpack Compose, Material Design 3
-- Room, ViewModel, StateFlow, Coroutines
-- WorkManager, AlarmManager, BroadcastReceiver, NotificationCompat
-- Glance home-screen widgets
-
-**Web**
-- Preact + Signals, TypeScript, Vite
-- Installable PWA with a service worker, working offline
-- IndexedDB storage
-- Google Drive (app data folder) sync
-
-**Notifications relay**
-- Cloudflare Worker + D1 for web push and fetching linked calendars
+Sign in with Google on each device and your tasks follow you. **Scan to set up** copies your linked calendars, sheets and settings to a new device with a QR code.
 
 ---
 
 ## Screenshots
-### 🏠 Matrix Dashboard
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/27d8d266-e9fe-4d86-bfca-61ac682b4e07" width="220" alt="Nexus Home Screen">
+  <img src="https://github.com/user-attachments/assets/8c26c6b6-d90b-4b00-a0a1-797954d1d756" width="200" alt="Create a task" hspace="6">
+  <img src="https://github.com/user-attachments/assets/bb5f6707-e568-429a-84b0-f41bb92daa88" width="200" alt="Tasks in priority quadrants" hspace="6">
+  <img src="https://github.com/user-attachments/assets/16382977-c0d9-4f0a-9175-e950f8155850" width="200" alt="Task editor" hspace="6">
 </p>
-
 <p align="center">
-  <em>
-    Priority Matrix dashboard featuring High, Medium, Low and None quadrants.
-  </em>
+  <img src="https://github.com/user-attachments/assets/698f47a8-fb7f-4354-8a17-2ce67d72398b" width="200" alt="Rich notes" hspace="6">
+  <img src="https://github.com/user-attachments/assets/6f99f2ca-84a6-4812-a9fc-ce1bb8cc0046" width="200" alt="Dragging a task" hspace="6">
+  <img src="https://github.com/user-attachments/assets/931d4c71-1551-4214-a769-c650dd897b57" width="200" alt="Task moved to a new priority" hspace="6">
 </p>
+<p align="center"><em>Create, organise, write notes and drag tasks between priorities.</em></p>
 
 ---
 
-### ➕ Quick Task Creation
+<details>
+<summary><b>Built with</b></summary>
 
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/8c26c6b6-d90b-4b00-a0a1-797954d1d756" width="220" alt="Create Task">
-</p>
+- **Android:** Kotlin, Jetpack Compose, Material 3, Room, WorkManager, Glance widgets
+- **Web:** Preact + Signals, TypeScript, Vite, installable PWA (offline), IndexedDB, Google Drive sync
+- **Mac / Windows Desk:** native macOS app (JavaScript for Automation + WebKit), PowerShell on Windows
+- **Notifications relay:** Cloudflare Worker + D1 (web push, linked calendars)
 
-<p align="center">
-  <em>
-    Create tasks instantly using the + button or by dragging it to any of the matrix.
-  </em>
-</p>
-
----
-
-### 📋 Matrix Organization
-
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/bb5f6707-e568-429a-84b0-f41bb92daa88" width="220" alt="Tasks Organized">
-</p>
-
-<p align="center">
-  <em>
-    Tasks organized into priority quadrants for better focus and planning.
-  </em>
-</p>
-
----
-
-### 📝 Rich Task Editor & Notes
-
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/16382977-c0d9-4f0a-9175-e950f8155850" width="220" alt="Task Editor" hspace="8">
-  <img src="https://github.com/user-attachments/assets/698f47a8-fb7f-4354-8a17-2ce67d72398b" width="220" alt="Rich Notes" hspace="8">
-</p>
-
-<p align="center">
-  <em>
-    Advanced note editor with checklists, bullet lists, numbered lists and structured note-taking.
-  </em>
-</p>
-
----
-
-### 🔄 Drag & Drop Prioritization
-
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/6f99f2ca-84a6-4812-a9fc-ce1bb8cc0046" width="220" alt="Dragging Task" hspace="8">
-  <img src="https://github.com/user-attachments/assets/931d4c71-1551-4214-a769-c650dd897b57" width="220" alt="Task Reprioritized" hspace="8">
-</p>
-
-<p align="center">
-  <em>
-    Move tasks between quadrants using intuitive drag & drop interactions.
-  </em>
-</p>
-
----
+</details>
 
 ## License
 
-Licensed under GNU GPL v3.
+GNU GPL v3. You're free to use, study, change and share Nexus, as long as you credit the author,
+keep changes open source and keep the same license.
 
-### What this means
-
-You are free to:
-
-- Use
-- Modify
-- Study
-- Share
-
-Under the following conditions:
-
-- Credit must be given to the original author
-- Modified versions must remain open source
-- GPL v3 license must be preserved
-
-### Author
-
-Priyanshu Pradhan
-
-Please respect the original work and contribute back whenever possible.
+**Author:** Priyanshu Pradhan
