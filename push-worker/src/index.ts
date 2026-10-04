@@ -59,8 +59,9 @@ const FEED_ID = /^[A-Za-z0-9_-]{43}$/;
 const FEED_MAX_BYTES = 1024 * 1024;
 const FEED_MAX = 50000;
 const FEED_IDLE_MS = 365 * 24 * 60 * 60 * 1000;
-/** Calendar providers whose private iCal links may be fetched for a device (no open proxy). */
-const ICS_HOSTS = [/^calendar\.google\.com$/, /^([a-z0-9-]+\.)*icloud\.com$/, /^calendar\.zoho\.(com|eu|in|com\.au|jp)$/, /^outlook\.(office365|live)\.com$/, /^outlook\.office\.com$/];
+/** Calendar providers whose private iCal links may be fetched for a device (no open proxy).
+ *  Brightspace (D2L) covers university course calendars, e.g. Manipal Online's portal. */
+const ICS_HOSTS = [/^calendar\.google\.com$/, /^([a-z0-9-]+\.)*icloud\.com$/, /^calendar\.zoho\.(com|eu|in|com\.au|jp)$/, /^outlook\.(office365|live)\.com$/, /^outlook\.office\.com$/, /^learning\.onlinemanipal\.com$/, /^([a-z0-9-]+\.)*brightspace\.com$/];
 
 // ─── HTTP ──────────────────────────────────────────────────────────────────────
 

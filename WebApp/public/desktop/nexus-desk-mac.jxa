@@ -1392,7 +1392,7 @@ function buildMenu() {
 // ─── Linked calendars (fetched here: native apps aren't bound by browser CORS) ───
 
 // The same calendar hosts the Nexus relay accepts; anything else is refused.
-const ICS_HOSTS = [/^calendar\.google\.com$/, /^([a-z0-9-]+\.)*icloud\.com$/, /^calendar\.zoho\.(com|eu|in|com\.au|jp)$/, /^outlook\.(office365|live)\.com$/, /^outlook\.office\.com$/];
+const ICS_HOSTS = [/^calendar\.google\.com$/, /^([a-z0-9-]+\.)*icloud\.com$/, /^calendar\.zoho\.(com|eu|in|com\.au|jp)$/, /^outlook\.(office365|live)\.com$/, /^outlook\.office\.com$/, /^learning\.onlinemanipal\.com$/, /^([a-z0-9-]+\.)*brightspace\.com$/];
 const ICS_MAX_BYTES = 5 * 1024 * 1024;
 let icsSession = null;
 
